@@ -24,8 +24,21 @@ const log = mod('stage:trigger')
 
 /**
  * Tokens ayant franchi un seuil non encore déclenché.
- * On ne cherche que le seuil le PLUS HAUT franchi : un token qui passe
+ *
+ * On ne retient que le seuil le PLUS HAUT franchi : un token qui passe
  * directement de 80K à 600K déclenche à 500K, pas trois fois d'affilée.
+ *
+ * Mais retenir le plus haut ne suffisait pas : les seuils inférieurs
+ * restaient sans snapshot, donc encore `pending`, et revenaient un par cycle.
+ * Le token descendait l'échelle. Observé sur ROBIN : alerte à 5 M (mc 5,8 M),
+ * puis à 1 M alors que la mc valait 14 M, puis rejet à 500 K à 15,6 M — ce
+ * dernier rejet le faisant basculer en quarantaine via `appendToToken`, donc
+ * hors de toute surveillance, après deux alertes légitimes.
+ *
+ * `depasses` renvoie ces seuils-là pour qu'ils soient classés d'emblée
+ * (`decision: 'backfilled'`) : verrouillés, jamais alertés, mais conservés —
+ * M5 doit pouvoir distinguer un palier franchi sous nos yeux d'un palier déjà
+ * dépassé avant l'admission.
  */
 export async function findCrossings(cfg, { limit = 200 } = {}) {
   const thresholds = [...cfg.thresholds.trigger].sort((a, b) => a - b)
@@ -45,9 +58,25 @@ export async function findCrossings(cfg, { limit = 200 } = {}) {
     const mc = token.market?.mc ?? 0
     const crossed = thresholds.filter(t => mc >= t)
     const pending = crossed.filter(t => !already.has(triggersRepo.triggerId(token._id, t)))
-    if (pending.length) out.push({ token, threshold: Math.max(...pending), mc })
+    const choix = selectCrossing(thresholds, mc, id => already.has(triggersRepo.triggerId(token._id, id)))
+    if (choix) out.push({ token, mc, ...choix })
   }
   return out
+}
+
+/**
+ * Règle de sélection, isolée pour être vérifiable sans base.
+ *
+ * @param {number[]} thresholds  paliers, croissants
+ * @param {number}   mc          capitalisation courante
+ * @param {Function} dejaTraite  (palier) => booléen
+ * @returns {{threshold: number, depasses: number[]}|null}
+ */
+export function selectCrossing(thresholds, mc, dejaTraite) {
+  const pending = thresholds.filter(t => mc >= t && !dejaTraite(t))
+  if (!pending.length) return null
+  const threshold = Math.max(...pending)
+  return { threshold, depasses: pending.filter(t => t !== threshold) }
 }
 
 /** Les 9 métriques candidates de M6 + celles de la source. Aucune n'est un filtre. */
@@ -106,7 +135,8 @@ function buildRawSubscores(deep, filters, token) {
 
 export async function processTriggers(cfg, { limit = 200 } = {}) {
   const crossings = await findCrossings(cfg, { limit })
-  const stats = { franchissements: crossings.length, alertes: 0, rejetes: {}, sansDonnees: 0, outcomes: 0 }
+  const stats = { franchissements: crossings.length, alertes: 0, rejetes: {},
+                  sansDonnees: 0, outcomes: 0, rattrapes: 0 }
   if (!crossings.length) return stats
 
   const src = getSource(cfg)
@@ -117,7 +147,29 @@ export async function processTriggers(cfg, { limit = 200 } = {}) {
   // sans les rejetes, M5 n a aucun groupe de comparaison.
   const ouverts = []
 
-  for (const { token, threshold, mc } of crossings) {
+  for (const { token, threshold, mc, depasses } of crossings) {
+    // Classer d'abord les paliers déjà dépassés à l'admission. Ils prennent
+    // leur `_id`, donc ne reviendront plus — sans alerte, sans outcome (leur
+    // instant de déclenchement est fictif, l'ouvrir polluerait le groupe de
+    // comparaison de M5) et sans `appendToToken`, qui aurait changé le statut.
+    for (const t of depasses ?? []) {
+      await triggersRepo.record({
+        token: token._id,
+        chain: token.chain,
+        symbol: token.symbol,
+        threshold: t,
+        config_version: cfg._id,
+        context: { mc, age_minutes: token.created_at ? Math.round((Date.now() - token.created_at) / 60_000) : null },
+        candidates: {},
+        filters: [],                    // vide : ne doit pas peser sur rejectionRates()
+        decision: 'backfilled',
+        rejection_reason: null,
+        backfill_reason: 'deja_depasse_a_l_admission',
+        score: null
+      })
+      stats.rattrapes = (stats.rattrapes ?? 0) + 1
+    }
+
     // --- analyse approfondie : 1 appel couvre 5 contrôles -------------------
     let markets = null
     try {
