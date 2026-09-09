@@ -22,6 +22,7 @@ import { admit, checkActivity } from '../pipeline/stages/admission.js'
 import { monitor } from '../pipeline/stages/monitoring.js'
 import { processTriggers } from '../pipeline/stages/trigger.js'
 import { trackOutcomes } from '../pipeline/stages/outcome.js'
+import { dispatchAlerts } from '../pipeline/stages/dispatch.js'
 import * as health from '../repos/health.js'
 
 const log = mod('worker')
@@ -49,6 +50,7 @@ async function runCycle() {
     activity: () => checkActivity(cfg),
     monitoring: () => monitor(cfg),
     triggers: () => processTriggers(cfg),
+    dispatch: () => dispatchAlerts(cfg),
     outcomes: () => trackOutcomes(cfg)
   })
 
@@ -69,6 +71,7 @@ async function runCycle() {
     surveilles: stats.monitoring?.releves,
     franchissements: stats.triggers?.franchissements,
     alertes: stats.triggers?.alertes,
+    envoyees: stats.dispatch?.envoyees,
     credits
   }, 'cycle terminé')
 

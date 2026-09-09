@@ -107,7 +107,7 @@ export const CONFIG_V1 = {
     // (25, 16, 3, 4 puis 0 pools sur des appels identiques). Gratuit, sans clé.
     secondary: 'dexscreener',
     // Budget quotidien ALIGNE sur le plan Mobula reellement souscrit.
-    // Quotas mensuels : gratuit 1 000, Demarrer 125 000, Croissance 1 250 000.
+    // Quotas mensuels : gratuit 10 000, Demarrer 125 000, Croissance 1 250 000.
     // Le limiteur refuse les appels au-dela — mieux vaut un pipeline qui
     // ralentit qu un pipeline qui martele une API qui le rejette.
     plan: 'starter',              // free | starter | growth

@@ -11,7 +11,7 @@
  * décrémente jamais : il ne reflète PAS le quota réel. Les quotas sont
  * MENSUELS et fixés par le plan souscrit :
  *
- *     gratuit      1 000 / mois  (~33/jour  — inexploitable en continu)
+ *     gratuit     10 000 / mois  (~333/jour — environ 22 cycles/jour)
  *     Démarrer   125 000 / mois  (~4 166/jour)
  *     Croissance 1 250 000 / mois
  *

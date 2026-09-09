@@ -16,7 +16,10 @@
     "p4": "node --env-file=.env src/scripts/p4-check.js",
     "p5": "node --env-file=.env src/scripts/p5-check.js",
     "start": "node src/workers/pipeline.js",
-    "p6": "node --env-file=.env src/scripts/p6-check.js"
+    "p6": "node --env-file=.env src/scripts/p6-check.js",
+    "p7": "node --env-file=.env src/scripts/p7-check.js",
+    "start:api": "node src/workers/api.js",
+    "p8": "node --env-file=.env src/scripts/p8-check.js"
   },
   "dependencies": {
     "ioredis": "^5.4.1",

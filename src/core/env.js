@@ -11,6 +11,10 @@ const SPEC = {
   REDIS_URL:         { required: false, desc: 'Redis — rate limiter partagé (P1). Repli mémoire si absent.' },
   TELEGRAM_TOKEN:    { required: false, desc: 'bot Telegram (P8)' },
   TELEGRAM_CHAT_ID:  { required: false, desc: 'salon de destination des alertes (P8)' },
+  TELEGRAM_WEBHOOK_SECRET: { required: false, desc: 'jeton secret du webhook Telegram' },
+  HELIUS_WEBHOOK_SECRET:   { required: false, desc: 'en-tete d authentification du webhook Helius' },
+  API_TOKEN:         { required: false, desc: 'jeton des routes /api/* du service web' },
+  PORT:              { required: false, desc: 'port du service web (fourni par Railway)' },
   NODE_ENV:          { required: false, desc: 'development | production' },
   LOG_LEVEL:         { required: false, desc: 'debug | info | warn | error' }
 }
