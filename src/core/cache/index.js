@@ -152,12 +152,23 @@ export async function connect({ timeoutMs = 10_000 } = {}) {
     return impl
   }
 
+  // Déclaré hors du `try` pour pouvoir être fermé depuis le `catch` : sans ça
+  // le client continue de réessayer en arrière-plan après le repli, et peut
+  // finir connecté alors que plus personne ne s'en sert.
+  let client = null
+
   try {
     const { default: Redis } = await import('ioredis')
-    const client = new Redis(process.env.REDIS_URL, {
+    client = new Redis(process.env.REDIS_URL, {
       maxRetriesPerRequest: 3,
       lazyConnect: true,
       connectTimeout: timeoutMs,
+      // Le réseau privé de Railway ne publie que des AAAA : `redis.railway
+      // .internal` n'a pas d'adresse IPv4. `family: 0` laisse la résolution
+      // accepter les deux familles ; forcer IPv4 échouerait silencieusement,
+      // et l'échec se traduirait par un repli mémoire — donc le retour de la
+      // fuite, sans que rien ne le signale clairement.
+      family: 0,
       // Sans plafond, ioredis réessaie indéfiniment et émet des erreurs
       // non capturées qui feraient tomber le processus.
       retryStrategy: times => (times > 5 ? null : Math.min(times * 500, 3000))
@@ -175,6 +186,7 @@ export async function connect({ timeoutMs = 10_000 } = {}) {
     log.info('Redis connecté')
     return impl
   } catch (e) {
+    try { client?.disconnect() } catch { /* déjà fermé */ }
     impl = new MemoryCache()
     log.warn({ err: e.message },
       'Redis injoignable — REPLI MÉMOIRE. Le pipeline continue, mais quotas et '
