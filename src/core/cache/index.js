@@ -63,7 +63,18 @@ class RedisCache {
   quit() { return this.r.quit() }
 }
 
-export async function connect() {
+/**
+ * Redis est une OPTIMISATION, pas une dépendance vitale : il ne sert qu'à
+ * partager le limiteur de débit et les verrous entre processus. Un seul
+ * worker fonctionne parfaitement sans lui.
+ *
+ * On ne laisse donc JAMAIS son indisponibilité tuer le pipeline. Une URL
+ * présente mais injoignable — service Railway pas encore prêt, mal relié,
+ * ou en cours de redémarrage — faisait sortir le worker en code 1, et
+ * l'orchestrateur le relançait en boucle. Chaque redémarrage coûte des
+ * minutes de découverte, et la fenêtre Pulse ne remonte qu'à ~3 h.
+ */
+export async function connect({ timeoutMs = 10_000 } = {}) {
   if (impl) return impl
 
   if (!process.env.REDIS_URL) {
@@ -72,12 +83,36 @@ export async function connect() {
     return impl
   }
 
-  const { default: Redis } = await import('ioredis')
-  const client = new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: 3, lazyConnect: true })
-  await client.connect()
-  impl = new RedisCache(client)
-  log.info('Redis connecté')
-  return impl
+  try {
+    const { default: Redis } = await import('ioredis')
+    const client = new Redis(process.env.REDIS_URL, {
+      maxRetriesPerRequest: 3,
+      lazyConnect: true,
+      connectTimeout: timeoutMs,
+      // Sans plafond, ioredis réessaie indéfiniment et émet des erreurs
+      // non capturées qui feraient tomber le processus.
+      retryStrategy: times => (times > 5 ? null : Math.min(times * 500, 3000))
+    })
+
+    // Un `error` non écouté sur un client ioredis est une exception fatale.
+    client.on('error', e => log.warn({ err: e.message }, 'erreur Redis'))
+
+    await Promise.race([
+      client.connect(),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('délai de connexion dépassé')), timeoutMs))
+    ])
+
+    impl = new RedisCache(client)
+    log.info('Redis connecté')
+    return impl
+  } catch (e) {
+    impl = new MemoryCache()
+    log.warn({ err: e.message },
+      'Redis injoignable — REPLI MÉMOIRE. Le pipeline continue, mais quotas et '
+      + 'verrous ne sont plus partagés : à corriger avant de faire tourner '
+      + 'plusieurs processus (worker + collecteur).')
+    return impl
+  }
 }
 
 export function cache() {

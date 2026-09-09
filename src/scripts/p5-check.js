@@ -119,8 +119,46 @@ async function main() {
     if (f.rejets_declenchement) console.log(`      rejets déclenchement : ${JSON.stringify(f.rejets_declenchement)}`)
   } else { ko('aucun entonnoir enregistré'); allOk = false }
 
-  // --- 7. Fichiers de déploiement -----------------------------------------
-  console.log('\n7. Déploiement Railway')
+  // --- 7. Démarrage réel des workers ---------------------------------------
+  // Les sections précédentes importent les étages directement. Elles ne
+  // touchent JAMAIS les points d'entrée — c'est ainsi qu'un `cache is not a
+  // function` dans workers/pipeline.js est passé entre les mailles et n'a
+  // planté qu'au déploiement. On lance donc les vrais processus.
+  console.log('\n7. Démarrage réel des points d\'entrée')
+  const { spawn } = await import('node:child_process')
+
+  const demarre = (script, attendu, ms = 25_000) => new Promise(resolve => {
+    const p = spawn(process.execPath, ['--env-file=.env', script], {
+      env: { ...process.env, LOG_LEVEL: 'info' }
+    })
+    let sortie = ''
+    let fini = false
+    const done = r => { if (fini) return; fini = true; p.kill('SIGTERM'); resolve(r) }
+
+    const lire = d => {
+      sortie += d.toString()
+      if (/démarrage impossible|TypeError|ReferenceError/i.test(sortie)) {
+        const m = sortie.match(/"?(?:err|message)"?:\s*"([^"]+)"/)
+        done({ ok: false, err: m?.[1] ?? 'erreur au démarrage' })
+      } else if (attendu.test(sortie)) done({ ok: true })
+    }
+    p.stdout.on('data', lire)
+    p.stderr.on('data', lire)
+    p.on('exit', code => done({ ok: false, err: `sorti en code ${code}` }))
+    setTimeout(() => done({ ok: false, err: 'aucun signe de vie' }), ms)
+  })
+
+  for (const [script, motif, label] of [
+    ['src/workers/pipeline.js', /tâche planifiée|démarrage du pipeline/, 'worker pipeline'],
+    ['src/workers/api.js', /service web démarré/, 'service web']
+  ]) {
+    const r = await demarre(script, motif)
+    ;(r.ok ? ok : ko)(`${label.padEnd(16)} ${r.ok ? 'démarre' : 'ÉCHEC : ' + r.err}`)
+    if (!r.ok) allOk = false
+  }
+
+  // --- 8. Fichiers de déploiement -----------------------------------------
+  console.log('\n8. Déploiement Railway')
   const { existsSync, readFileSync } = await import('node:fs')
   for (const file of ['Dockerfile', 'railway.json', '.dockerignore']) {
     ;(existsSync(file) ? ok : ko)(file)

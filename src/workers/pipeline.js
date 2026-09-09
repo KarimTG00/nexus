@@ -99,7 +99,7 @@ async function main() {
   await cache.connect()
   const cfg = await active()
 
-  if (!cache().shared) {
+  if (!cache.cache().shared) {
     log.warn('cache non partagé (REDIS_URL absent) — acceptable en mono-processus, '
       + 'à corriger avant d\'ajouter le collecteur de swaps')
   }
