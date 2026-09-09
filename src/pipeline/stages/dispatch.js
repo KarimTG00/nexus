@@ -49,7 +49,8 @@ async function sentLastHour() {
  * qui n'a pas encore de ligne dans `alerts`.
  */
 export async function dispatchAlerts(cfg, { limit = 20 } = {}) {
-  const stats = { candidats: 0, envoyees: 0, muets: 0, cooldown: 0, plafond: 0, echecs: 0, calibration: 0 }
+  const stats = { candidats: 0, envoyees: 0, muets: 0, cooldown: 0, plafond: 0,
+                  echecs: 0, calibration: 0, perimes: 0 }
 
   const pending = await col('trigger_snapshots').aggregate([
     { $match: { decision: 'alerted' } },
@@ -76,9 +77,16 @@ export async function dispatchAlerts(cfg, { limit = 20 } = {}) {
   }
 
   const { cooldown_hours: cooldown, max_per_hour: cap } = cfg.thresholds.alert
+
+  // Une alerte perimee est pire qu une alerte manquee : elle invite a entrer
+  // sur un mouvement termine. Le cas se presente des qu un envoi a ete
+  // suspendu — panne, calibration, redeploiement — et le retard accumule
+  // partirait alors d un coup.
+  const maxAgeMs = (cfg.thresholds.alert.max_age_minutes ?? 30) * 60_000
   let horaire = await sentLastHour()
 
   for (const snap of pending.reverse()) {          // du plus ancien au plus récent
+    if (Date.now() - new Date(snap.ts).getTime() > maxAgeMs) { stats.perimes++; continue }
     if (horaire >= cap) { stats.plafond++; continue }
     if (await isMuted(snap.token)) { stats.muets++; continue }
     if (await inCooldown(snap.token, snap.threshold, cooldown)) { stats.cooldown++; continue }

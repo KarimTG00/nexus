@@ -75,6 +75,8 @@ export const CONFIG_V1 = {
     alert: {
       min_score: 70,
       cooldown_hours: 72,
+      // Au-dela, le franchissement est trop ancien pour etre actionnable.
+      max_age_minutes: 30,
       max_per_hour: 6
     }
   },
