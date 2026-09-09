@@ -26,9 +26,29 @@ import * as health from '../repos/health.js'
 import * as positionsRepo from '../repos/positions.js'
 import * as routes from './routes.js'
 import { createStaticHandler, checkBasicAuth } from './static.js'
+import * as cacheMod from '../core/cache/index.js'
 import { mod } from '../core/logger.js'
 
 const log = mod('api')
+
+/**
+ * Etat du processus web lui-meme, pour la sonde.
+ *
+ * `cache` est le champ qui compte : « redis » signifie que la deduplication
+ * des swaps est expiree par Redis ; « memoire » qu'elle s'accumule dans le
+ * process, ce qui l'a deja tue une fois. `rss_mb` donne la trajectoire.
+ */
+function etatWeb() {
+  let c = null
+  try { c = cacheMod.cache() } catch { /* cache pas encore connecte */ }
+  return {
+    cache: c ? (c.shared ? 'redis' : 'memoire') : 'indisponible',
+    cache_entrees: c?.store?.size ?? null,
+    cache_evictions: c?.evictions ?? null,
+    rss_mb: Math.round(process.memoryUsage().rss / 1048576),
+    uptime_min: +(process.uptime() / 60).toFixed(1)
+  }
+}
 
 const RACINE = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const DASHBOARD = process.env.DASHBOARD_DIR ?? join(RACINE, 'dashboard', 'dist')
@@ -76,7 +96,12 @@ export function createApiServer({ port = process.env.PORT ?? 3000 } = {}) {
       // Railway et les supervisions doivent pouvoir l'interroger.
       if (path === '/health') {
         const h = await health.health()
-        return json(res, h.alive ? 200 : 503, h)
+        // `health()` decrit le PIPELINE. Sans les lignes ci-dessous, la sonde
+        // ne disait rien du processus qui la sert — or c'est lui qui est mort
+        // par epuisement memoire, et son repli sur le cache memoire est
+        // silencieux. Un `cache: "memoire"` ici annonce la rechute AVANT
+        // qu'elle tue le service.
+        return json(res, h.alive ? 200 : 503, { ...h, web: etatWeb() })
       }
 
       // --- webhook Helius : accuser réception AVANT de traiter -------------
