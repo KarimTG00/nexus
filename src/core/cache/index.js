@@ -12,8 +12,42 @@ const log = mod('cache')
 
 let impl = null
 
+/**
+ * Nombre maximal d'entrées du repli mémoire.
+ *
+ * Ce plafond n'est pas une précaution théorique : sans lui, le service web est
+ * mort par épuisement mémoire. La déduplication des swaps écrit une clé
+ * `swap:<signature>:<mint>:<side>` par swap, avec 24 h de TTL — et cette clé
+ * n'est JAMAIS relue. Or l'expiration ici est paresseuse : elle ne se déclenche
+ * qu'à la lecture de la clé concernée. Des centaines de milliers d'entrées par
+ * jour s'accumulaient donc sans qu'aucune ne puisse jamais être libérée.
+ */
+const MAX_ENTREES = 50_000
+const BALAYAGE_MS = 60_000
+
 class MemoryCache {
-  constructor() { this.store = new Map(); this.shared = false }
+  constructor() {
+    this.store = new Map()
+    this.shared = false
+    this.evictions = 0
+    this.dernierBalayage = 0
+    this.dernierAvis = 0
+
+    // Balayage périodique : récupère les entrées expirées que personne ne
+    // relira. `unref` pour ne pas maintenir le process en vie à lui seul.
+    this.balai = setInterval(() => this.balayer(), BALAYAGE_MS)
+    this.balai.unref?.()
+  }
+
+  balayer() {
+    const now = Date.now()
+    this.dernierBalayage = now
+    let libres = 0
+    for (const [k, e] of this.store) {
+      if (e.exp && e.exp < now) { this.store.delete(k); libres++ }
+    }
+    return libres
+  }
 
   async get(k) {
     const e = this.store.get(k)
@@ -23,6 +57,34 @@ class MemoryCache {
   }
 
   async set(k, v, ttlSec) {
+    if (!this.store.has(k) && this.store.size >= MAX_ENTREES) {
+      // Balayer d'abord : sous TTL court, cela suffit à faire de la place.
+      //
+      // Mais au plus une fois par seconde : un balayage parcourt les 50 000
+      // entrées, et le relancer à chaque écriture rendrait le chemin chaud
+      // quadratique — mesuré à 13 s pour 60 000 écritures avant ce garde-fou.
+      const peutBalayer = Date.now() - this.dernierBalayage > 1000
+      if (!peutBalayer || this.balayer() === 0) {
+        // Sinon, éviction de la plus ancienne insérée — `Map` conserve l'ordre.
+        //
+        // Compromis assumé : évincer une clé de déduplication encore valide
+        // peut faire recompter un swap, donc gonfler une position. C'est
+        // regrettable, mais un OOM perd TOUT le flux pendant le redémarrage,
+        // et fait perdre les webhooks qu'Helius pousse pendant ce temps.
+        // Le vrai correctif est REDIS_URL, qui expire les clés de lui-même.
+        const premiere = this.store.keys().next().value
+        this.store.delete(premiere)
+        // Avertir au plus une fois par minute : sous saturation soutenue, un
+        // message par millier d'évictions noierait le reste des logs.
+        this.evictions++
+        if (Date.now() - this.dernierAvis > 60_000) {
+          this.dernierAvis = Date.now()
+          log.warn({ evictions: this.evictions, plafond: MAX_ENTREES },
+            'repli mémoire saturé — définir REDIS_URL : des clés encore valides '
+            + 'sont évincées, la déduplication devient approximative')
+        }
+      }
+    }
     this.store.set(k, { v, exp: ttlSec ? Date.now() + ttlSec * 1000 : null })
     return 'OK'
   }
@@ -48,7 +110,7 @@ class MemoryCache {
 
   async unlock(k) { this.store.delete(`lock:${k}`) }
   async ping() { return 'PONG (mémoire)' }
-  async quit() { this.store.clear() }
+  async quit() { clearInterval(this.balai); this.store.clear() }
 }
 
 class RedisCache {
@@ -64,9 +126,16 @@ class RedisCache {
 }
 
 /**
- * Redis est une OPTIMISATION, pas une dépendance vitale : il ne sert qu'à
- * partager le limiteur de débit et les verrous entre processus. Un seul
- * worker fonctionne parfaitement sans lui.
+ * Redis reste facultatif au démarrage, mais ce n'est plus une simple
+ * optimisation depuis que le collecteur de swaps tourne. Il porte trois
+ * choses : le limiteur de débit partagé, les verrous, et la déduplication des
+ * swaps — cette dernière écrit une clé par swap avec 24 h de TTL. Le repli
+ * mémoire n'expire qu'à la relecture, or ces clés ne sont jamais relues : sans
+ * plafond, le service web mourait par épuisement mémoire. D'où MAX_ENTREES,
+ * qui borne le dégât mais rend la déduplication approximative sous charge.
+ *
+ * Autrement dit : un seul worker sans collecteur fonctionne très bien sans
+ * Redis ; le service web qui reçoit les webhooks Helius, non.
  *
  * On ne laisse donc JAMAIS son indisponibilité tuer le pipeline. Une URL
  * présente mais injoignable — service Railway pas encore prêt, mal relié,
