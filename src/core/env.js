@@ -9,7 +9,7 @@ const SPEC = {
   HELIUS_KEY:        { required: true,  desc: 'clé API Helius (RPC Solana : mint/freeze authority)' },
   HELIUS_WEBHOOK_ID: { required: false, desc: 'webhook Helius — collecteur de swaps (P7)' },
   REDIS_URL:         { required: false, desc: 'Redis — rate limiter partagé (P1). Repli mémoire si absent.' },
-  TELEGRAM_TOKEN:    { required: false, desc: 'bot Telegram (P8)' },
+  TELEGRAM_BOT_TOKEN: { required: false, desc: 'bot Telegram (P8) — alias accepte : TELEGRAM_TOKEN' },
   TELEGRAM_CHAT_ID:  { required: false, desc: 'salon de destination des alertes (P8)' },
   TELEGRAM_WEBHOOK_SECRET: { required: false, desc: 'jeton secret du webhook Telegram' },
   HELIUS_WEBHOOK_SECRET:   { required: false, desc: 'en-tete d authentification du webhook Helius' },

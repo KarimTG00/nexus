@@ -57,13 +57,22 @@ const arrows = direction =>
   direction === 'up' ? '↗↗↗' : direction === 'down' ? '↘↘↘' : '→'
 
 export class TelegramNotifier {
-  constructor({ token = process.env.TELEGRAM_TOKEN, chatId = process.env.TELEGRAM_CHAT_ID } = {}) {
+  constructor({
+    // Les deux noms sont acceptes : TELEGRAM_BOT_TOKEN est le plus repandu.
+    token = process.env.TELEGRAM_BOT_TOKEN ?? process.env.TELEGRAM_TOKEN,
+    // Alias tolérés — mais attention : sous Linux (donc sur Railway) les noms
+    // de variables sont SENSIBLES À LA CASSE. `ADMIN_Id` ne serait pas lu.
+    chatId = process.env.TELEGRAM_CHAT_ID ?? process.env.TELEGRAM_ADMIN_ID ?? process.env.ADMIN_ID
+  } = {}) {
     this.name = 'telegram'
     this.token = token
     this.chatId = chatId
     this.available = Boolean(token && chatId)
     this.supportsButtons = true
-    if (!this.available) log.warn('TELEGRAM_TOKEN ou TELEGRAM_CHAT_ID absent — notificateur inactif')
+    if (!this.available) {
+      log.warn({ token: Boolean(token), chatId: Boolean(chatId) },
+        'TELEGRAM_BOT_TOKEN ou TELEGRAM_CHAT_ID absent — notificateur inactif')
+    }
   }
 
   async #call(method, body) {
