@@ -1,6 +1,9 @@
-node_modules
+**/node_modules
+**/dist
 .env
+.env.*
 .git
+.claude
 docs
 poc
 *.log

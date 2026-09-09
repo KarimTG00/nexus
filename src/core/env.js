@@ -13,7 +13,11 @@ const SPEC = {
   TELEGRAM_CHAT_ID:  { required: false, desc: 'salon de destination des alertes (P8)' },
   TELEGRAM_WEBHOOK_SECRET: { required: false, desc: 'jeton secret du webhook Telegram' },
   HELIUS_WEBHOOK_SECRET:   { required: false, desc: 'en-tete d authentification du webhook Helius' },
-  API_TOKEN:         { required: false, desc: 'jeton des routes /api/* du service web' },
+  API_TOKEN:         { required: false, desc: 'jeton porteur pour un client non navigateur' },
+  DASHBOARD_USER:    { required: false, desc: 'identifiant Basic protegeant dashboard + API' },
+  DASHBOARD_PASSWORD:{ required: false, desc: 'mot de passe Basic (sans lui, acces libre)' },
+  DASHBOARD_DIR:     { required: false, desc: 'chemin du dashboard compile (defaut : dashboard/dist)' },
+  DASHBOARD_ORIGIN:  { required: false, desc: 'origine autorisee en CORS — inutile si meme origine' },
   PORT:              { required: false, desc: 'port du service web (fourni par Railway)' },
   NODE_ENV:          { required: false, desc: 'development | production' },
   LOG_LEVEL:         { required: false, desc: 'debug | info | warn | error' }
