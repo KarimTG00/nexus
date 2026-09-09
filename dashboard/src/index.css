@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+/* Thème sombre — bleu-gris profond plutôt que noir pur : les aplats
+   totalement noirs fatiguent sur écran et écrasent la hiérarchie visuelle.
+   On garde de la matière dans les fonds pour que les cartes se détachent. */
+@theme {
+  --color-bg:        #14161c;
+  --color-surface:   #1a1d25;
+  --color-raised:    #21252f;
+  --color-line:      #2a2f3a;
+  --color-line-soft: #22262f;
+
+  --color-ink:       #e6e8ee;
+  --color-ink-dim:   #9aa2b1;
+  --color-ink-faint: #6b7280;
+
+  --color-accent:    #7c6df2;
+  --color-accent-dim:#4c3fb0;
+  --color-up:        #4ade80;
+  --color-down:      #f87171;
+  --color-warn:      #fbbf24;
+  --color-info:      #60a5fa;
+}
+
+html, body, #root { height: 100%; }
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Barres de défilement discrètes, accordées au thème */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: #2f3542; border-radius: 6px; border: 2px solid var(--color-bg); }
+*::-webkit-scrollbar-thumb:hover { background: #3b4252; }

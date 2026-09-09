@@ -15,6 +15,7 @@ import { ingest, verifyWebhook } from '../collector/ingest.js'
 import { handleUpdate } from '../bot/commands.js'
 import * as health from '../repos/health.js'
 import * as positionsRepo from '../repos/positions.js'
+import * as routes from './routes.js'
 import { mod } from '../core/logger.js'
 
 const log = mod('api')
@@ -46,6 +47,12 @@ export function createApiServer({ port = process.env.PORT ?? 3000 } = {}) {
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`)
     const path = url.pathname
+
+    // Le dashboard tourne sur une autre origine en développement (Vite).
+    // En production, restreindre via DASHBOARD_ORIGIN.
+    res.setHeader('Access-Control-Allow-Origin', process.env.DASHBOARD_ORIGIN ?? '*')
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+    if (req.method === 'OPTIONS') { res.writeHead(204); return res.end() }
 
     try {
       // --- santé : sonde de la plateforme, sans authentification -----------
@@ -98,8 +105,23 @@ export function createApiServer({ port = process.env.PORT ?? 3000 } = {}) {
           return json(res, 401, { error: 'non autorisé' })
         }
 
+        const p = Object.fromEntries(url.searchParams)
+
+        if (path === '/api/overview') return json(res, 200, await routes.overview())
+        if (path === '/api/tokens') return json(res, 200, await routes.listTokens(p))
+        if (path === '/api/triggers') return json(res, 200, await routes.recentTriggers(p))
         if (path === '/api/funnel') return json(res, 200, await health.funnel() ?? {})
         if (path === '/api/positions') return json(res, 200, await positionsRepo.stats())
+
+        // /api/tokens/{chain}:{address} — l'identifiant contient des « : »
+        const m = path.match(/^\/api\/tokens\/(.+)$/)
+        if (m) {
+          const detail = await routes.tokenDetail(decodeURIComponent(m[1]))
+          return detail
+            ? json(res, 200, detail)
+            : json(res, 404, { error: 'token inconnu' })
+        }
+
         return json(res, 404, { error: 'route inconnue' })
       }
 

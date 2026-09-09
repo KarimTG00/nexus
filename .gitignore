@@ -4,3 +4,6 @@ node_modules/
 *.log
 scratch/
 poc/out/
+dashboard/node_modules/
+dashboard/dist/
+.claude/
