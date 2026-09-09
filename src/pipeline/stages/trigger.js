@@ -73,10 +73,23 @@ export async function findCrossings(cfg, { limit = 200 } = {}) {
  * @returns {{threshold: number, depasses: number[]}|null}
  */
 export function selectCrossing(thresholds, mc, dejaTraite) {
-  const pending = thresholds.filter(t => mc >= t && !dejaTraite(t))
+  const franchis = thresholds.filter(t => mc >= t)
+  if (!franchis.length) return null
+
+  const pending = franchis.filter(t => !dejaTraite(t))
   if (!pending.length) return null
-  const threshold = Math.max(...pending)
-  return { threshold, depasses: pending.filter(t => t !== threshold) }
+
+  // Référence : le plus haut palier que le token dépasse AUJOURD'HUI, qu'il
+  // ait déjà été traité ou non. Prendre `max(pending)` ne suffisait pas — un
+  // token à 4,9 M à qui il ne manque que le palier 150 K aurait vu ce 150 K
+  // devenir son « franchissement », avec analyse complète et alerte à la clé.
+  const plusHaut = Math.max(...franchis)
+
+  // Ce palier est déjà classé : tout ce qui reste est du retard, jamais un
+  // franchissement. Aucune alerte, aucun outcome, mais on l'enregistre.
+  if (!pending.includes(plusHaut)) return { threshold: null, depasses: pending }
+
+  return { threshold: plusHaut, depasses: pending.filter(t => t !== plusHaut) }
 }
 
 /** Les 9 métriques candidates de M6 + celles de la source. Aucune n'est un filtre. */
@@ -135,8 +148,10 @@ function buildRawSubscores(deep, filters, token) {
 
 export async function processTriggers(cfg, { limit = 200 } = {}) {
   const crossings = await findCrossings(cfg, { limit })
-  const stats = { franchissements: crossings.length, alertes: 0, rejetes: {},
-                  sansDonnees: 0, outcomes: 0, rattrapes: 0 }
+  // Ne compter que les franchissements RÉELS : une entrée sans palier courant
+  // n'est que du retard à classer, l'inclure gonflerait l'entonnoir.
+  const stats = { franchissements: crossings.filter(c => c.threshold !== null).length,
+                  alertes: 0, rejetes: {}, sansDonnees: 0, outcomes: 0, rattrapes: 0 }
   if (!crossings.length) return stats
 
   const src = getSource(cfg)
@@ -169,6 +184,10 @@ export async function processTriggers(cfg, { limit = 200 } = {}) {
       })
       stats.rattrapes = (stats.rattrapes ?? 0) + 1
     }
+
+    // Aucun palier courant à traiter : le token a dépassé ces seuils avant
+    // qu'on le regarde, on s'arrête là. Pas d'appel payant, pas d'alerte.
+    if (threshold === null) continue
 
     // --- analyse approfondie : 1 appel couvre 5 contrôles -------------------
     let markets = null
