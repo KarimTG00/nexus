@@ -147,14 +147,19 @@ export async function processTriggers(cfg, { limit = 200 } = {}) {
     const raw = buildRawSubscores({ ...markets, velocity }, results, token)
     const scored = await computeScore(raw, cfg, { distributions })
 
-    const alertThreshold = cfg.thresholds.alert.min_score
-    const decision = passed && scored.score !== null && scored.score >= alertThreshold
-      ? 'alerted' : 'rejected'
+    // Le seuil de note est un filtre à part entière (étage `score`), évalué
+    // ici parce qu'il consomme le produit des filtres `deep`. Le déclarer
+    // ainsi lui donne sa ligne dans `filters[]` : M5 peut alors balayer son
+    // seuil comme n'importe quel autre, sans recollecte.
+    const scoreCtx = { _id: token._id, score: scored.score, coverage: scored.coverage }
+    const scoreRun = await runFilters('score', scoreCtx, cfg)
+    results.push(...scoreRun.results)
 
-    if (decision === 'rejected' && passed) {
-      stats.rejetes.low_score = (stats.rejetes.low_score ?? 0) + 1
-    } else if (rejectionReason) {
-      stats.rejetes[rejectionReason] = (stats.rejetes[rejectionReason] ?? 0) + 1
+    const decision = passed && scoreRun.passed ? 'alerted' : 'rejected'
+    const raisonFinale = rejectionReason ?? scoreRun.rejectionReason
+
+    if (raisonFinale) {
+      stats.rejetes[raisonFinale] = (stats.rejetes[raisonFinale] ?? 0) + 1
     }
 
     // --- snapshot : le contexte figé ----------------------------------------
@@ -184,7 +189,7 @@ export async function processTriggers(cfg, { limit = 200 } = {}) {
       candidates: buildCandidates(token, { ...markets, velocity }, token.market),
       filters: results,
       decision,
-      rejection_reason: decision === 'rejected' ? (rejectionReason ?? 'low_score') : null,
+      rejection_reason: decision === 'rejected' ? raisonFinale : null,
       score: scored.score,
       subscores: scored.subscores,
       raw_subscores: scored.raw,

@@ -6,7 +6,8 @@
  *
  * Contrat d'un filtre :
  *   name       identifiant stable — sert de rejection_reason, ne jamais renommer
- *   stage      'admission' | 'activity' | 'deep'
+ *   stage      'admission' | 'activity' | 'deep' | 'score'
+ *              'score' s'exécute APRÈS le calcul de la note, sur son résultat
  *   blocking   true = rejette, false = simple bonus de score
  *   cost       'free' | 'paid' — pilote l'ordre d'exécution
  *   configKey  chemin du seuil dans la configuration
@@ -29,7 +30,7 @@ export async function loadFilters({ force = false } = {}) {
   if (registry && !force) return registry
 
   const found = []
-  for (const stage of ['admission', 'activity', 'deep']) {
+  for (const stage of ['admission', 'activity', 'deep', 'score']) {
     let files = []
     try {
       files = (await readdir(join(HERE, stage))).filter(f => f.endsWith('.js'))
