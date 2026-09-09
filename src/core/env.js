@@ -1,0 +1,43 @@
+/**
+ * Validation des variables d'environnement au démarrage.
+ * Mieux vaut échouer tout de suite avec un message clair qu'au premier appel réseau.
+ */
+
+const SPEC = {
+  MONGODB_URI:       { required: true,  desc: 'URI du cluster MongoDB' },
+  MOBULA_KEY:        { required: true,  desc: 'clé API Mobula (découverte + market data)' },
+  HELIUS_KEY:        { required: true,  desc: 'clé API Helius (RPC Solana : mint/freeze authority)' },
+  HELIUS_WEBHOOK_ID: { required: false, desc: 'webhook Helius — collecteur de swaps (P7)' },
+  REDIS_URL:         { required: false, desc: 'Redis — rate limiter partagé (P1). Repli mémoire si absent.' },
+  TELEGRAM_TOKEN:    { required: false, desc: 'bot Telegram (P8)' },
+  TELEGRAM_CHAT_ID:  { required: false, desc: 'salon de destination des alertes (P8)' },
+  NODE_ENV:          { required: false, desc: 'development | production' },
+  LOG_LEVEL:         { required: false, desc: 'debug | info | warn | error' }
+}
+
+export function loadEnv() {
+  const missing = []
+  const env = {}
+
+  for (const [key, { required }] of Object.entries(SPEC)) {
+    const v = process.env[key]
+    if (!v && required) missing.push(key)
+    env[key] = v ?? null
+  }
+
+  if (missing.length) {
+    console.error('\nVariables d\'environnement manquantes :')
+    for (const k of missing) console.error(`  ${k.padEnd(20)} ${SPEC[k].desc}`)
+    console.error('\nLancer avec : node --env-file=.env <script>\n')
+    process.exit(1)
+  }
+
+  return env
+}
+
+/** État des variables optionnelles, pour le rapport de démarrage. */
+export function envStatus() {
+  return Object.entries(SPEC).map(([key, s]) => ({
+    key, desc: s.desc, required: s.required, present: Boolean(process.env[key])
+  }))
+}

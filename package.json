@@ -1,0 +1,46 @@
+{
+  "name": "nexus",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "node --env-file=.env src/workers/pipeline.js",
+    "boot": "node --env-file=.env src/boot-check.js",
+    "db:init": "node --env-file=.env src/core/db/init.js",
+    "p1": "node --env-file=.env src/scripts/p1-check.js",
+    "p2": "node --env-file=.env src/scripts/p2-check.js",
+    "p3": "node --env-file=.env src/scripts/p3-check.js",
+    "p4": "node --env-file=.env src/scripts/p4-check.js",
+    "p5": "node --env-file=.env src/scripts/p5-check.js",
+    "start": "node src/workers/pipeline.js",
+    "p6": "node --env-file=.env src/scripts/p6-check.js"
+  },
+  "dependencies": {
+    "ioredis": "^5.4.1",
+    "mongodb": "^6.10.0",
+    "pino": "^9.5.0",
+    "pino-pretty": "^13.0.0",
+    "viem": "^2.56.3"
+  },
+  "description": "Multi-chain memecoin screener with self-calibrating filters, built with the Mobula API",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/KarimTG00/nexus.git"
+  },
+  "keywords": [
+    "mobula",
+    "mobula-api",
+    "crypto-api",
+    "web3",
+    "blockchain-data",
+    "memecoin",
+    "solana",
+    "base",
+    "bnb-chain",
+    "token-screener"
+  ]
+}
