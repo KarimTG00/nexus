@@ -17,7 +17,10 @@ const TRI = {
   recent: { discovered_at: -1 },
   age: { created_at: -1 },
   liquidite: { 'market.liquidity_usd': -1 },
-  holders: { 'holders.count': -1 }
+  holders: { 'holders.count': -1 },
+  // Trie sur le MEILLEUR score du token : en ordre decroissant, MongoDB
+  // compare le plus grand element du tableau.
+  score: { 'triggers.score': -1 }
 }
 
 /** Score d'intérêt courant, dérivé de la vélocité stockée. */
@@ -30,11 +33,18 @@ const interet = v => {
  * Liste paginée. Projection volontairement étroite : le document token porte
  * des tableaux (pools, filtres, candidates) inutiles en vue liste.
  */
-export async function listTokens({ status, chain, sort = 'mc', limit = 50, offset = 0, q } = {}) {
+export async function listTokens({ status, chain, sort = 'mc', limit = 50, offset = 0, q, alerted } = {}) {
   const filtre = {}
   if (status) filtre.status = { $in: String(status).split(',') }
   if (chain) filtre.chain = { $in: String(chain).split(',') }
   if (q) filtre.symbol = { $regex: String(q).replace(/[^\w$]/g, ''), $options: 'i' }
+
+  // « Alerte » au sens de ce que la liste affiche : un token dont AU MOINS un
+  // franchissement a ete decide `alerted`. Different de status='alerted', qui
+  // ne retient que l etat courant et en compte deux fois moins.
+  if (alerted === '1' || alerted === 'true' || alerted === true) {
+    filtre['triggers.decision'] = 'alerted'
+  }
 
   const projection = {
     symbol: 1, name: 1, chain: 1, address: 1, status: 1, tier: 1,
@@ -80,6 +90,11 @@ export async function listTokens({ status, chain, sort = 'mc', limit = 50, offse
       createdAt: t.created_at ?? null,
       discoveredAt: t.discovered_at ?? null,
       triggers: (t.triggers ?? []).length,
+      // Score du DERNIER franchissement, et meilleur obtenu. Null si le token
+      // n a jamais franchi de palier — jamais 0, qui serait un vrai score.
+      score: (t.triggers ?? []).at(-1)?.score ?? null,
+      scoreMax: (t.triggers ?? []).reduce((m, x) =>
+        x?.score == null ? m : Math.max(m ?? -Infinity, x.score), null),
       alerted: (t.triggers ?? []).some(x => x.decision === 'alerted')
     }))
   }

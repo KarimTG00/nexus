@@ -8,15 +8,19 @@ const TRIS = [
   ['recent', 'Découverte'],
   ['age', 'Création'],
   ['liquidite', 'Liquidité'],
-  ['holders', 'Holders']
+  ['holders', 'Holders'],
+  ['score', 'Score']
 ]
 
+// Un onglet porte des PARAMETRES, pas seulement un statut : « Alertes » se
+// lit sur l historique des franchissements, pas sur l etat courant.
 const FILTRES = [
-  ['', 'Tous'],
-  ['tracked,alerted', 'Surveillés'],
-  ['pending_activity', 'En attente'],
-  ['quarantine', 'Quarantaine'],
-  ['archived', 'Archivés']
+  { id: 'tous',        label: 'Tous',        params: {} },
+  { id: 'suivis',      label: 'Surveillés',  params: { status: 'tracked,alerted' } },
+  { id: 'alertes',     label: 'Alertés',     params: { alerted: '1' } },
+  { id: 'attente',     label: 'En attente',  params: { status: 'pending_activity' } },
+  { id: 'quarantaine', label: 'Quarantaine', params: { status: 'quarantine' } },
+  { id: 'archives',    label: 'Archivés',    params: { status: 'archived' } }
 ]
 
 export default function TokenList({ selection, onSelect }) {
@@ -25,7 +29,7 @@ export default function TokenList({ selection, onSelect }) {
   const [erreur, setErreur] = useState(null)
 
   const [tri, setTri] = useState('mc')
-  const [statut, setStatut] = useState('')
+  const [filtre, setFiltre] = useState('tous')
   const [chaine, setChaine] = useState('')
   const [recherche, setRecherche] = useState('')
   const [page, setPage] = useState(0)
@@ -42,14 +46,16 @@ export default function TokenList({ selection, onSelect }) {
   useEffect(() => {
     let annule = false
     if (!data) setChargement(true)
-    api.tokens({ sort: tri, status: statut, chain: chaine, q: recherche, limit: parPage, offset: page * parPage })
+    const params = FILTRES.find(f => f.id === filtre)?.params ?? {}
+    api.tokens({ sort: tri, chain: chaine, q: recherche,
+                 limit: parPage, offset: page * parPage, ...params })
       .then(d => { if (!annule) { setData(d); setErreur(null) } })
       .catch(e => { if (!annule) setErreur(e.message) })
       .finally(() => { if (!annule) setChargement(false) })
     return () => { annule = true }
-  }, [tri, statut, chaine, recherche, page, tick])
+  }, [tri, filtre, chaine, recherche, page, tick])
 
-  useEffect(() => { setPage(0) }, [tri, statut, chaine, recherche])
+  useEffect(() => { setPage(0) }, [tri, filtre, chaine, recherche])
 
   return (
     <div className="flex h-full flex-col">
@@ -63,11 +69,11 @@ export default function TokenList({ selection, onSelect }) {
             text-ink placeholder:text-ink-faint outline-none focus:border-accent/60"
         />
         <div className="flex flex-wrap gap-1">
-          {FILTRES.map(([v, label]) => (
-            <button key={v} onClick={() => setStatut(v)}
+          {FILTRES.map(f => (
+            <button key={f.id} onClick={() => setFiltre(f.id)}
               className={`rounded-md px-2 py-1 text-[11px] font-medium transition
-                ${statut === v ? 'bg-accent/20 text-accent' : 'text-ink-faint hover:bg-raised hover:text-ink-dim'}`}>
-              {label}
+                ${filtre === f.id ? 'bg-accent/20 text-accent' : 'text-ink-faint hover:bg-raised hover:text-ink-dim'}`}>
+              {f.label}
             </button>
           ))}
         </div>
@@ -140,6 +146,12 @@ export default function TokenList({ selection, onSelect }) {
                 <span>liq {usd(t.liquidity)}</span>
                 <span>{num(t.holders)} holders</span>
                 {t.top10 !== null && <span>top10 {pct(t.top10, 0)}</span>}
+                {/* Meilleur score obtenu — coherent avec le tri « Score ». */}
+                {t.scoreMax !== null && (
+                  <span className={t.scoreMax >= 70 ? 'font-semibold text-up' : ''}>
+                    score {t.scoreMax}
+                  </span>
+                )}
               </div>
             </button>
           )
