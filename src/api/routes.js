@@ -206,3 +206,50 @@ export async function recentTriggers({ limit = 30, decision } = {}) {
       : null
   }))
 }
+
+/**
+ * Rapports de la face 2 — lecture pure des collections `analytics_*`,
+ * déjà agrégées par le worker analytique. Le dashboard ne recalcule rien.
+ */
+export async function analytics() {
+  const [blind, perf, funnels, verdicts, positions] = await Promise.all([
+    col('analytics_blindspots').find({}).sort({ period: -1 }).limit(8).toArray(),
+    col('analytics_filter_perf').find({}).sort({ period: -1 }).limit(8).toArray(),
+    col('analytics_funnel').find({}).sort({ period: -1 }).limit(14).toArray(),
+    col('outcomes').aggregate([
+      { $group: {
+          _id: { verdict: '$verdict', decision: '$decision' },
+          n: { $sum: 1 },
+          multiple_moyen: { $avg: '$multiple_max' },
+          multiple_max: { $max: '$multiple_max' }
+      } },
+      { $sort: { n: -1 } }
+    ]).toArray(),
+    col('positions').estimatedDocumentCount()
+  ])
+
+  // Distribution des scores des tokens alertés vs rejetés — permet de voir
+  // si le seuil d'alerte sépare réellement deux populations.
+  const scores = await col('trigger_snapshots').aggregate([
+    { $match: { score: { $ne: null } } },
+    { $bucket: {
+        groupBy: '$score',
+        boundaries: [0, 20, 40, 60, 70, 80, 90, 101],
+        default: 'autre',
+        output: { n: { $sum: 1 }, alertes: { $sum: { $cond: [{ $eq: ['$decision', 'alerted'] }, 1, 0] } } }
+    } }
+  ]).toArray()
+
+  return {
+    blindspots: blind,
+    filterPerf: perf,
+    funnels,
+    verdicts: verdicts.map(v => ({
+      ...v._id, n: v.n,
+      multiple_moyen: v.multiple_moyen ? +v.multiple_moyen.toFixed(2) : null,
+      multiple_max: v.multiple_max ? +v.multiple_max.toFixed(2) : null
+    })),
+    scores,
+    positions
+  }
+}

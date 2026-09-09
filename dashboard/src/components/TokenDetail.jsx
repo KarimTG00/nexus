@@ -75,17 +75,25 @@ export default function TokenDetail({ id }) {
   const [d, setD] = useState(null)
   const [chargement, setChargement] = useState(true)
   const [erreur, setErreur] = useState(null)
+  const [tick, setTick] = useState(0)
+
+  useEffect(() => {
+    const t = setInterval(() => setTick(n => n + 1), 30_000)
+    return () => clearInterval(t)
+  }, [])
 
   useEffect(() => {
     if (!id) return
     let annule = false
-    setChargement(true); setD(null)
+    // On ne vide pas l affichage sur un rafraichissement : seul un changement
+    // de token justifie de repartir d un ecran vide.
+    if (!d || d.token.id !== id) { setChargement(true); setD(null) }
     api.token(id)
       .then(x => { if (!annule) { setD(x); setErreur(null) } })
       .catch(e => { if (!annule) setErreur(e.message) })
       .finally(() => { if (!annule) setChargement(false) })
     return () => { annule = true }
-  }, [id])
+  }, [id, tick])
 
   if (!id) return <Empty>Sélectionnez un token dans la liste.</Empty>
   if (chargement) return <Spinner />

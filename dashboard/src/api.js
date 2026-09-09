@@ -21,5 +21,6 @@ export const api = {
   overview: () => get('/api/overview'),
   tokens: params => get('/api/tokens', params),
   token: id => get(`/api/tokens/${encodeURIComponent(id)}`),
-  triggers: params => get('/api/triggers', params)
+  triggers: params => get('/api/triggers', params),
+  analytics: () => get('/api/analytics')
 }

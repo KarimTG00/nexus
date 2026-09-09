@@ -4,11 +4,20 @@ import { num, usd } from './format.js'
 import { Badge } from './components/ui.jsx'
 import TokenList from './components/TokenList.jsx'
 import TokenDetail from './components/TokenDetail.jsx'
+import Analytics from './components/Analytics.jsx'
 
 /** Bandeau supérieur : santé du pipeline et volumétrie, d'un coup d'œil. */
-function Entete({ o }) {
+function Entete({ o, vue, setVue }) {
   const h = o?.health
   const c = o?.funnel?.counts ?? {}
+
+  const Onglet = ({ id, children }) => (
+    <button onClick={() => setVue(id)}
+      className={`rounded-md px-2.5 py-1 text-[12px] font-medium transition
+        ${vue === id ? 'bg-accent/20 text-accent' : 'text-ink-faint hover:bg-raised hover:text-ink-dim'}`}>
+      {children}
+    </button>
+  )
 
   return (
     <header className="flex shrink-0 flex-wrap items-center justify-between gap-4
@@ -17,7 +26,10 @@ function Entete({ o }) {
         <span className="text-[15px] font-bold tracking-tight text-ink">
           Nexus<span className="text-accent">.</span>
         </span>
-        <span className="text-[11px] text-ink-faint">screener multi-chaînes</span>
+        <nav className="flex gap-1">
+          <Onglet id="tokens">Tokens</Onglet>
+          <Onglet id="analyse">Analyse globale</Onglet>
+        </nav>
       </div>
 
       {o && (
@@ -55,6 +67,7 @@ function Entete({ o }) {
 export default function App() {
   const [overview, setOverview] = useState(null)
   const [selection, setSelection] = useState(null)
+  const [vue, setVue] = useState('tokens')
 
   useEffect(() => {
     const charger = () => api.overview().then(setOverview).catch(() => {})
@@ -66,17 +79,22 @@ export default function App() {
 
   return (
     <div className="flex h-full flex-col bg-bg">
-      <Entete o={overview} />
+      <Entete o={overview} vue={vue} setVue={setVue} />
 
-      <div className="flex min-h-0 flex-1">
-        <aside className="w-[340px] shrink-0 border-r border-line bg-surface/40">
-          <TokenList selection={selection} onSelect={setSelection} />
-        </aside>
-
-        <main className="min-w-0 flex-1 overflow-y-auto">
-          <TokenDetail id={selection} />
+      {vue === 'tokens' ? (
+        <div className="flex min-h-0 flex-1">
+          <aside className="w-[340px] shrink-0 border-r border-line bg-surface/40">
+            <TokenList selection={selection} onSelect={setSelection} />
+          </aside>
+          <main className="min-w-0 flex-1 overflow-y-auto">
+            <TokenDetail id={selection} />
+          </main>
+        </div>
+      ) : (
+        <main className="min-h-0 flex-1 overflow-y-auto">
+          <Analytics />
         </main>
-      </div>
+      )}
     </div>
   )
 }

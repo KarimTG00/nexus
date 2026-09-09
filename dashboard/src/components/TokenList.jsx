@@ -30,16 +30,23 @@ export default function TokenList({ selection, onSelect }) {
   const [page, setPage] = useState(0)
 
   const parPage = 60
+  // Le pipeline ecrit en continu : sans rafraichissement, la liste fige au
+  // montage et donne l impression d un systeme a l arret.
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    const t = setInterval(() => setTick(n => n + 1), 30_000)
+    return () => clearInterval(t)
+  }, [])
 
   useEffect(() => {
     let annule = false
-    setChargement(true)
+    if (!data) setChargement(true)
     api.tokens({ sort: tri, status: statut, chain: chaine, q: recherche, limit: parPage, offset: page * parPage })
       .then(d => { if (!annule) { setData(d); setErreur(null) } })
       .catch(e => { if (!annule) setErreur(e.message) })
       .finally(() => { if (!annule) setChargement(false) })
     return () => { annule = true }
-  }, [tri, statut, chaine, recherche, page])
+  }, [tri, statut, chaine, recherche, page, tick])
 
   useEffect(() => { setPage(0) }, [tri, statut, chaine, recherche])
 
