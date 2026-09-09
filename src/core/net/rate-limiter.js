@@ -7,9 +7,16 @@
  *   2. concurrence maximale
  *   3. compteur de crédits journalier
  *
- * NOTE : la période du quota Mobula est INCONNUE (10 000 crédits observés,
- * `x-ratelimit-remaining` ne décrémente pas). On compte donc nous-mêmes, sur
- * une base journalière, hypothèse la plus prudente.
+ * QUOTA MOBULA — l'en-tête `x-ratelimit-limit` annonce 10 000 mais ne
+ * décrémente jamais : il ne reflète PAS le quota réel. Les quotas sont
+ * MENSUELS et fixés par le plan souscrit :
+ *
+ *     gratuit      1 000 / mois  (~33/jour  — inexploitable en continu)
+ *     Démarrer   125 000 / mois  (~4 166/jour)
+ *     Croissance 1 250 000 / mois
+ *
+ * On compte donc nous-mêmes, sur une base journalière dérivée du plan.
+ * `sources.daily_budget` doit rester cohérent avec `sources.plan`.
  */
 
 import { cache } from '../cache/index.js'
