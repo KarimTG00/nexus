@@ -17,7 +17,7 @@ const REGISTRY = {
     apiKey: process.env.MOBULA_KEY,
     batchSize: cfg.sources.batch_size,
     mergeCycles: cfg.sources.pulse_merge_cycles,
-    dailyBudget: cfg.sources.daily_budget ?? 8000
+    dailyBudget: cfg.sources.daily_budget ?? 3800
   }),
 
   dexscreener: () => new DexscreenerSource()

@@ -106,6 +106,12 @@ export const CONFIG_V1 = {
     // Repli pour les pools et la liquidité : token/markets de Mobula est instable
     // (25, 16, 3, 4 puis 0 pools sur des appels identiques). Gratuit, sans clé.
     secondary: 'dexscreener',
+    // Budget quotidien ALIGNE sur le plan Mobula reellement souscrit.
+    // Quotas mensuels : gratuit 1 000, Demarrer 125 000, Croissance 1 250 000.
+    // Le limiteur refuse les appels au-dela — mieux vaut un pipeline qui
+    // ralentit qu un pipeline qui martele une API qui le rejette.
+    plan: 'starter',              // free | starter | growth
+    daily_budget: 3800,           // 114 000/mois : 91 % du plan Demarrer
     batch_size: 50,              // mesuré au POC : 50 tokens pour 1 crédit
     discovery_interval_min: 5,
     // Pagination adaptative : mesure, le bucket plafonne a 50 items et Solana

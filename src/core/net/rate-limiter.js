@@ -29,7 +29,7 @@ export class RateLimiter {
    * @param {number} opts.concurrency   appels simultanés max
    * @param {number} opts.warnAt        seuil d'avertissement (0-1)
    */
-  constructor(name, { dailyBudget = 8000, minIntervalMs = 150, concurrency = 2, warnAt = 0.8,
+  constructor(name, { dailyBudget = 3800, minIntervalMs = 150, concurrency = 2, warnAt = 0.8,
                       maxIntervalMs = 5000 } = {}) {
     this.name = name
     this.dailyBudget = dailyBudget
@@ -42,6 +42,7 @@ export class RateLimiter {
     this.lastCallAt = 0
     this.inFlight = 0
     this.warned = false
+    this.exhaustedLogged = false
 
     // Compteurs exposés — le script de validation doit pouvoir les lire
     this.calls = 0
@@ -94,6 +95,13 @@ export class RateLimiter {
     const used = await this.used()
 
     if (used + cost > this.dailyBudget) {
+      if (!this.exhaustedLogged) {
+        this.exhaustedLogged = true
+        log.error({ source: this.name, used, budget: this.dailyBudget },
+          'BUDGET QUOTIDIEN ÉPUISÉ — plus aucun appel jusqu\'à minuit UTC. '
+          + 'La découverte étant interrompue, les tokens lancés pendant ce temps '
+          + 'sortiront de la fenêtre Pulse (~3 h) et seront définitivement perdus.')
+      }
       throw new QuotaExceededError(
         `Budget ${this.name} épuisé : ${used}/${this.dailyBudget} crédits aujourd'hui`)
     }
