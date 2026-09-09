@@ -29,7 +29,7 @@ export const CONFIG_V1 = {
     second_chance:  { enabled: true },
     watchdog:       { enabled: true },
     social_scoring: { enabled: false },   // activé au seuil 5M seulement
-    swap_collector: { enabled: false }    // P7
+    swap_collector: { enabled: true }     // P7
   },
 
   thresholds: {
@@ -43,6 +43,24 @@ export const CONFIG_V1 = {
       activity_window_hours: 3,
       activity_retry_minutes: 30,
       max_toxic_buyers: 2
+    },
+
+    // Synchronisation du webhook Helius.
+    //
+    // Chaque mise a jour coute 100 credits Helius, quel que soit le nombre
+    // d adresses envoyees. Le cout ne depend donc que de la CADENCE :
+    //   30 min -> 48 mises a jour/jour -> 4 800 credits/jour
+    //   60 min -> 24                   -> 2 400
+    //
+    // L autre bout du compromis : une adresse enregistree en retard fait
+    // perdre les premiers acheteurs du token, c est-a-dire exactement ce que
+    // M2 cherche. Trop espacer revient a collecter pour rien.
+    collector: {
+      sync_interval_min: 30,
+      // En deca, on attend : payer 100 credits pour deux adresses est un
+      // mauvais echange, sauf si elles patientent depuis longtemps.
+      min_new_addresses: 20,
+      max_wait_min: 120
     },
 
     trigger: [150_000, 500_000, 1_000_000, 5_000_000],

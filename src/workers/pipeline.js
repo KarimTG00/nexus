@@ -23,6 +23,7 @@ import { monitor } from '../pipeline/stages/monitoring.js'
 import { processTriggers } from '../pipeline/stages/trigger.js'
 import { trackOutcomes } from '../pipeline/stages/outcome.js'
 import { dispatchAlerts } from '../pipeline/stages/dispatch.js'
+import { syncIfNeeded } from '../collector/helius-webhook.js'
 import * as health from '../repos/health.js'
 
 const log = mod('worker')
@@ -78,6 +79,23 @@ async function runCycle() {
   return stats
 }
 
+/**
+ * Tient la liste d adresses du webhook Helius alignee sur les tokens vivants.
+ *
+ * Porte par le pipeline et non par le service web : c est lui qui sait quels
+ * tokens viennent d etre decouverts ou promus. Le service web, lui, se
+ * contente de RECEVOIR ce que Helius pousse.
+ *
+ * Volontairement hors du cycle : une mise a jour coute 100 credits Helius,
+ * la lier a la cadence de decouverte reviendrait a payer toutes les 6 min.
+ */
+async function syncCollector() {
+  const cfg = await active()
+  const r = await syncIfNeeded(cfg)
+  log.info(r, 'synchronisation du collecteur')
+  return r
+}
+
 /** Rapport quotidien du mode calibration : où le flux s'étrangle. */
 async function dailyReport() {
   const f = await health.funnel()
@@ -114,6 +132,10 @@ async function main() {
   const scheduler = new Scheduler()
   scheduler.every('cycle', cfg.sources.discovery_interval_min * 60_000, runCycle)
   scheduler.every('rapport', 6 * 3600_000, dailyReport, { runOnStart: false })
+
+  // Au demarrage aussi : un deploiement peut avoir laisse passer des tokens.
+  const collecteurMin = cfg.thresholds?.collector?.sync_interval_min ?? 30
+  scheduler.every('collecteur', collecteurMin * 60_000, syncCollector, { runOnStart: true })
 
   const shutdown = async signal => {
     log.info({ signal }, 'arrêt demandé')

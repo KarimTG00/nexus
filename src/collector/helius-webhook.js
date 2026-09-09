@@ -58,6 +58,7 @@ export async function sync({ webhookID, webhookURL, force = false } = {}) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     })
+    await rememberWebhookId(json?.webhookID)
     log.info({ webhookID: json?.webhookID, adresses: addresses.length }, 'webhook créé')
     return { created: true, webhookID: json?.webhookID, addresses: addresses.length }
   }
@@ -80,4 +81,111 @@ export async function sync({ webhookID, webhookURL, force = false } = {}) {
   })
   log.info({ webhookID, adresses: addresses.length }, 'webhook mis à jour')
   return { updated: true, webhookID, addresses: addresses.length }
+}
+
+// ---------------------------------------------------------------------------
+// Etat persistant et decision de synchronisation
+// ---------------------------------------------------------------------------
+
+const STATE_ID = 'collector'
+
+/**
+ * L identifiant du webhook DOIT survivre aux redemarrages.
+ *
+ * Sans cela, chaque deploiement en creerait un nouveau : 100 credits a chaque
+ * fois, et autant de webhooks concurrents poussant les memes transactions.
+ * On le lit d abord en base, ou il est ecrit a la creation, et on retombe sur
+ * la variable d environnement pour un webhook cree a la main.
+ */
+export async function resolveWebhookId() {
+  const doc = await col('system_state').findOne({ _id: STATE_ID })
+  return doc?.webhook_id ?? process.env.HELIUS_WEBHOOK_ID ?? null
+}
+
+async function rememberWebhookId(id) {
+  if (!id) return
+  await col('system_state').updateOne({ _id: STATE_ID },
+    { $set: { webhook_id: id, created_at: new Date() } }, { upsert: true })
+}
+
+async function state() {
+  return (await col('system_state').findOne({ _id: STATE_ID })) ?? {}
+}
+
+/** URL publique ou Helius doit pousser. Absente = collecteur inerte. */
+export function webhookUrl() {
+  let base = process.env.PUBLIC_URL
+  if (!base) return null
+  while (base.endsWith('/')) base = base.slice(0, -1)
+  return base + '/webhooks/helius'
+}
+
+/**
+ * Synchronise si — et seulement si — cela en vaut le cout.
+ *
+ * Une mise a jour coute 100 credits quel que soit le nombre d adresses. On
+ * attend donc d en avoir assez (`min_new_addresses`), mais jamais au-dela de
+ * `max_wait_min` : passe ce delai on paie, meme pour trois adresses, parce
+ * qu une adresse enregistree en retard fait perdre les premiers acheteurs du
+ * token — precisement ce que M2 cherche.
+ */
+export async function syncIfNeeded(cfg) {
+  if (!cfg?.features?.swap_collector?.enabled) {
+    return { skipped: true, reason: 'collecteur desactive' }
+  }
+
+  const url = webhookUrl()
+  if (!url) {
+    log.warn('PUBLIC_URL absente — le collecteur ne peut pas indiquer a Helius '
+      + 'ou pousser les swaps. Aucune position ne sera collectee.')
+    return { skipped: true, reason: 'PUBLIC_URL absente' }
+  }
+
+  const seuils = cfg.thresholds?.collector ?? {}
+  const minNew = seuils.min_new_addresses ?? 20
+  const maxWaitMs = (seuils.max_wait_min ?? 120) * 60_000
+
+  const webhookID = await resolveWebhookId()
+  if (!webhookID) return sync({ webhookURL: url })   // creation : rien a arbitrer
+
+  const addresses = await addressesToWatch()
+  if (!addresses.length) return { skipped: true, reason: 'aucune adresse a surveiller' }
+
+  const current = await get(webhookID).catch(() => null)
+  if (!current) {
+    // Webhook disparu cote Helius (supprime a la main, ou identifiant perime).
+    log.warn({ webhookID }, 'webhook introuvable — recreation')
+    await col('system_state').updateOne({ _id: STATE_ID },
+      { $unset: { webhook_id: '' } }, { upsert: true })
+    return sync({ webhookURL: url })
+  }
+
+  const known = new Set(current.accountAddresses ?? [])
+  const manquantes = addresses.filter(a => !known.has(a))
+
+  const s = await state()
+  if (!manquantes.length) {
+    if (s.pending_since) {
+      await col('system_state').updateOne({ _id: STATE_ID }, { $unset: { pending_since: '' } })
+    }
+    return { skipped: true, reason: 'liste inchangee', addresses: known.size }
+  }
+
+  const depuis = s.pending_since ? Date.now() - new Date(s.pending_since).getTime() : 0
+  if (manquantes.length < minNew && depuis < maxWaitMs) {
+    if (!s.pending_since) {
+      await col('system_state').updateOne({ _id: STATE_ID },
+        { $set: { pending_since: new Date() } }, { upsert: true })
+    }
+    return { skipped: true, reason: 'delta insuffisant',
+             manquantes: manquantes.length, seuil: minNew,
+             attente_min: Math.round(depuis / 60_000) }
+  }
+
+  const r = await sync({ webhookID, webhookURL: url, force: true })
+  await col('system_state').updateOne({ _id: STATE_ID },
+    { $set: { last_sync_at: new Date(), addresses: addresses.length },
+      $unset: { pending_since: '' },
+      $inc: { helius_credits: 100, syncs: 1 } }, { upsert: true })
+  return { ...r, manquantes: manquantes.length, credits: 100 }
 }
