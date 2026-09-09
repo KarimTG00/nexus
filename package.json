@@ -19,7 +19,9 @@
     "p6": "node --env-file=.env src/scripts/p6-check.js",
     "p7": "node --env-file=.env src/scripts/p7-check.js",
     "start:api": "node src/workers/api.js",
-    "p8": "node --env-file=.env src/scripts/p8-check.js"
+    "p8": "node --env-file=.env src/scripts/p8-check.js",
+    "analytics": "node --env-file=.env src/workers/analytics.js",
+    "p9": "node --env-file=.env src/scripts/p9-check.js"
   },
   "dependencies": {
     "ioredis": "^5.4.1",
