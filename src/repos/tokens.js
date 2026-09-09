@@ -197,6 +197,32 @@ export async function bulkInsertTokens(docs) {
  * Rafraîchit un token déjà connu à partir d'une donnée de découverte.
  * Gratuit : la donnée arrive de toute façon dans le cycle Pulse.
  */
+/**
+ * Remet en attente un token archive faute d activite, lorsque la source le
+ * renvoie a nouveau.
+ *
+ * Reapparaitre dans Pulse signifie qu une donnee FRAICHE vient d arriver —
+ * cas typique : la graduation, qui cree un nouveau pool des mois apres le
+ * listing. Sans cette reprise, `dueForActivityCheck` ne lisant que les
+ * `pending_activity`, ce token serait rafraichi indefiniment sans jamais
+ * etre reevalue.
+ *
+ * Le filtre restreint la reprise aux seuls archivages pour inactivite : un
+ * token ecarte pour une autre raison ne doit pas revenir par cette porte.
+ */
+export function buildResurrectOp(id) {
+  return { updateOne: {
+    filter: { _id: id, status: 'archived', rejection_reason: 'low_activity' },
+    update: { $set: {
+      status: 'pending_activity',
+      tier: 'hot',
+      next_check_at: new Date(),
+      archived_at: null,
+      rejection_reason: null
+    }, $inc: { resurrections: 1 } }
+  } }
+}
+
 export function buildRefreshOp(id, listing) {
   return { updateOne: { filter: { _id: id }, update: {
     $set: {

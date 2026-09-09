@@ -15,6 +15,7 @@ const FILTRES = [
   ['', 'Tous'],
   ['tracked,alerted', 'Surveillés'],
   ['pending_activity', 'En attente'],
+  ['quarantine', 'Quarantaine'],
   ['archived', 'Archivés']
 ]
 

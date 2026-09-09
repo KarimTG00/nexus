@@ -42,7 +42,7 @@ export async function discover(cfg) {
   }
   const stats = {
     vus: listings.length,
-    connus: 0, poolsAjoutes: 0, rejetesConnus: 0,
+    connus: 0, poolsAjoutes: 0, rejetesConnus: 0, reprises: 0,
     secondeChance: 0, nouveaux: 0
   }
 
@@ -58,6 +58,9 @@ export async function discover(cfg) {
   // Ecritures accumulees : ~300 ms l unite sur Atlas M0, soit des minutes
   // pour quelques centaines de tokens connus. Groupees, moins d une seconde.
   const ops = []
+  // Lot separe : `poolsAjoutes` se deduit de `ecrites - connus`, qui suppose
+  // une modification par token connu. Melanger les reprises fausserait ce compte.
+  const opsReprise = []
   const now = new Date()
 
   for (const listing of listings) {
@@ -66,6 +69,10 @@ export async function discover(cfg) {
     if (known) {
       stats.connus++
       ops.push(tokensRepo.buildRefreshOp(listing._id, listing))
+      // La source le renvoie : donnee fraiche disponible. Si on l avait archive
+      // faute d activite, c est le moment de lui redonner sa chance — le filtre
+      // de l operation la rend sans effet sur tous les autres.
+      opsReprise.push(tokensRepo.buildResurrectOp(listing._id))
       if (listing.pool?.address) ops.push(tokensRepo.buildAddPoolOp(listing._id, listing.pool))
       continue
     }
@@ -85,6 +92,7 @@ export async function discover(cfg) {
   }
 
   const ecrites = await tokensRepo.bulkOps('tokens', ops)
+  stats.reprises = await tokensRepo.bulkOps('tokens', opsReprise)
   stats.poolsAjoutes = Math.max(0, ecrites - stats.connus)
 
   log.info(stats, 'découverte')

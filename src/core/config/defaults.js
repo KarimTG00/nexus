@@ -38,6 +38,9 @@ export const CONFIG_V1 = {
       min_tx_15m: 30,
       min_wallets_15m: 20,
       second_chance_days: 7,
+      // Fenetre de patience de la phase B, bornee par la FENETRE PULSE et non
+      // par un delai arbitraire : au-dela, plus aucune donnee fraiche n'arrive.
+      activity_window_hours: 3,
       activity_retry_minutes: 30,
       max_toxic_buyers: 2
     },

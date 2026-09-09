@@ -149,8 +149,17 @@ export async function checkActivity(cfg) {
   const stats = { evalues: due.length, promus: 0, reportes: 0, archives: 0, sansDonnees: 0 }
   if (!due.length) return stats
 
-  // Fenêtre de patience : un token a N jours pour montrer de l'activité.
-  const windowMs = cfg.thresholds.admission.second_chance_days * 86400_000
+  // Fenêtre de patience, bornée par la FENÊTRE PULSE — pas par un délai choisi.
+  //
+  // `velocity` n'est rafraîchi que par `buildRefreshOp`, donc uniquement tant
+  // que la source continue de renvoyer le token : environ 3 h. Passé ce délai
+  // le document est gelé, et rejouer le filtre toutes les 30 min pendant 7
+  // jours ne pouvait plus rien changer — mesuré : 10 824 tokens réévalués en
+  // boucle sur des chiffres figés, 4,3 fois en moyenne, jusqu'à 11.
+  //
+  // Le repli `?? 3` est nécessaire : `active()` ne fusionne pas avec les
+  // valeurs par défaut, les versions de configuration antérieures n'ont pas la clé.
+  const windowMs = (cfg.thresholds.admission.activity_window_hours ?? 3) * 3600_000
   const retryMinutes = cfg.thresholds.admission.activity_retry_minutes ?? 30
   const ops = []
 

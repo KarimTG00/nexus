@@ -6,6 +6,44 @@ import {
 } from '../format.js'
 import { Badge, Card, Stat, ChainDot, Empty, Spinner, Sparkline } from './ui.jsx'
 
+/**
+ * Un lien social.
+ *
+ * L'URL vient des métadonnées du token, donc d'une source que n'importe qui
+ * peut renseigner en déployant un contrat. Un `javascript:` y serait une
+ * injection : on n'affiche un lien que si le schéma est http(s), sinon on
+ * montre le texte brut, sans le rendre cliquable.
+ */
+function Reseau({ label, url }) {
+  let href = null
+  let texte = url ? String(url) : null
+
+  if (url) {
+    try {
+      const u = new URL(String(url))
+      if (u.protocol === "http:" || u.protocol === "https:") {
+        href = u.href
+        // Affichage allégé : le domaine suffit à reconnaître le compte.
+        texte = u.host.replace("www.", "") + (u.pathname === "/" ? "" : u.pathname)
+      }
+    } catch { /* URL illisible : on garde le texte brut, non cliquable */ }
+  }
+
+  return (
+    <div className="min-w-0">
+      <div className="text-[11px] uppercase tracking-wide text-ink-faint">{label}</div>
+      <div className="mt-0.5 truncate text-[13px]">
+        {href
+          ? <a href={href} target="_blank" rel="noopener noreferrer nofollow"
+               className="text-accent hover:underline" title={href}>{texte}</a>
+          : texte
+            ? <span className="text-ink-faint" title="schéma non autorisé">{texte}</span>
+            : <span className="text-ink-faint">—</span>}
+      </div>
+    </div>
+  )
+}
+
 /** Une ligne de filtre : nom, valeur MESURÉE, seuil, verdict. */
 function LigneFiltre({ f }) {
   const etat = f.skipped ? 'skipped' : f.passed ? 'pass' : 'fail'
@@ -103,6 +141,11 @@ export default function TokenDetail({ id }) {
   const t = d.token
   const st = STATUTS[t.status] ?? { label: t.status, ton: 'faint' }
   const lien = explorateur(t.chain, t.address)
+  // Seuls les trois canaux que `socialPresence` reconnait cote serveur.
+  // `socials.others` porte des metadonnees (createdOn, properties.files),
+  // jamais des reseaux : le compter gonflerait le chiffre sans raison.
+  const nbReseaux = ['twitter', 'telegram', 'website']
+    .filter(k => t?.socials?.[k]).length
   const v5 = t.velocity?.['5min'] ?? {}
   const interet = v5.buyers != null && v5.sellers != null ? v5.buyers - v5.sellers : null
 
@@ -160,6 +203,23 @@ export default function TokenDetail({ id }) {
             ton={t.security?.checked ? 'up' : 'warn'}
             hint={t.security?.checked ? null : t.security?.reason} />
         </div>
+      </Card>
+
+      {/* --- réseaux sociaux ---------------------------------------------- */}
+      <Card title="Réseaux sociaux"
+        right={<span className="text-[11px] text-ink-faint">{nbReseaux} sur 3</span>}>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <Reseau label="X / Twitter" url={t.socials?.twitter} />
+          <Reseau label="Telegram" url={t.socials?.telegram} />
+          <Reseau label="Site" url={t.socials?.website} />
+        </div>
+        <p className="mt-3 border-t border-line pt-3 text-[11px] leading-relaxed text-ink-faint">
+          Déclaré par le créateur du token, relayé tel quel : un champ vide ne
+          prouve pas l'absence de compte. La couverture varie surtout selon le
+          launchpad — de quelques pour cent à plus de 80 % — ce qui en fait un
+          artefact de la source plutôt qu'un signal. Aucun rejet n'est fondé
+          dessus ; le score social reste enregistré comme métrique candidate.
+        </p>
       </Card>
 
       {/* --- évolution ---------------------------------------------------- */}
