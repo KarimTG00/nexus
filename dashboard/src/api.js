@@ -31,5 +31,6 @@ export const api = {
   tokens: params => get('/api/tokens', params),
   token: id => get(`/api/tokens/${encodeURIComponent(id)}`),
   triggers: params => get('/api/triggers', params),
-  analytics: () => get('/api/analytics')
+  analytics: () => get('/api/analytics'),
+  succes: () => get('/api/succes')
 }

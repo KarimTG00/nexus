@@ -175,6 +175,7 @@ export function createApiServer({ port = process.env.PORT ?? 3000 } = {}) {
 
         if (path === '/api/overview') return json(res, 200, await routes.overview())
         if (path === '/api/analytics') return json(res, 200, await routes.analytics())
+        if (path === '/api/succes') return json(res, 200, await routes.succes())
         if (path === '/api/tokens') return json(res, 200, await routes.listTokens(p))
         if (path === '/api/triggers') return json(res, 200, await routes.recentTriggers(p))
         if (path === '/api/funnel') return json(res, 200, await health.funnel() ?? {})

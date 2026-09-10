@@ -5,6 +5,7 @@ import { Badge } from './components/ui.jsx'
 import TokenList from './components/TokenList.jsx'
 import TokenDetail from './components/TokenDetail.jsx'
 import Analytics from './components/Analytics.jsx'
+import Succes from './components/Succes.jsx'
 
 /** Bandeau supérieur : santé du pipeline et volumétrie, d'un coup d'œil. */
 function Entete({ o, vue, setVue }) {
@@ -29,6 +30,7 @@ function Entete({ o, vue, setVue }) {
         <nav className="flex gap-1">
           <Onglet id="tokens">Tokens</Onglet>
           <Onglet id="analyse">Analyse globale</Onglet>
+          <Onglet id="succes">Réussites</Onglet>
         </nav>
       </div>
 
@@ -92,7 +94,7 @@ export default function App() {
         </div>
       ) : (
         <main className="min-h-0 flex-1 overflow-y-auto">
-          <Analytics />
+          {vue === 'succes' ? <Succes /> : <Analytics />}
         </main>
       )}
     </div>

@@ -15,6 +15,7 @@ import * as cache from '../core/cache/index.js'
 import { active } from '../core/config/store.js'
 import * as m7 from '../analytics/m7-blindspots.js'
 import * as m5 from '../analytics/m5-calibration.js'
+import * as m9 from '../analytics/m9-succes.js'
 import * as positionsRepo from '../repos/positions.js'
 
 const log = mod('analytics')
@@ -23,6 +24,8 @@ const MODULES = {
   // M7 d'abord : il révèle les plus gros trous, et il est le moins coûteux.
   m7: (cfg) => m7.run(cfg),
   m5: (cfg) => m5.run(cfg),
+  // M9 ne coûte aucun appel externe : il ne lit que ce qu'on a déjà écrit.
+  m9: (cfg) => m9.run(cfg),
   // Entretien : clôture des positions soldées, purge des anciennes.
   maintenance: async () => ({
     closes: await positionsRepo.closeSettled(),

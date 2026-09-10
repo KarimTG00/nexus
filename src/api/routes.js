@@ -226,6 +226,18 @@ export async function recentTriggers({ limit = 30, decision } = {}) {
  * Rapports de la face 2 — lecture pure des collections `analytics_*`,
  * déjà agrégées par le worker analytique. Le dashboard ne recalcule rien.
  */
+/**
+ * M9 — les tokens reellement attrapes.
+ *
+ * Distincte de `analytics()` parce qu elle repond a une autre question :
+ * non pas ou le flux s etrangle, mais ce qui en est sorti.
+ */
+export async function succes() {
+  const doc = await col('analytics_succes').findOne({}, { sort: { period: -1 } })
+  if (!doc) return { vide: true, raison: "analyse jamais executee" }
+  return doc
+}
+
 export async function analytics() {
   const [blind, perf, funnels, verdicts, positions] = await Promise.all([
     col('analytics_blindspots').find({}).sort({ period: -1 }).limit(8).toArray(),

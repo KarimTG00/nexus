@@ -186,7 +186,7 @@ export const collections = [
 
   // --- collections analytiques : pré-calculées pour le dashboard ------------
   ...['funnel', 'filter_perf', 'wallets', 'deployers',
-      'blindspots', 'discovery', 'regime', 'proposals'].map(n => ({
+      'blindspots', 'discovery', 'regime', 'proposals', 'succes'].map(n => ({
     name: `analytics_${n}`,
     indexes: [{ key: { period: -1 }, name: 'ix_period', unique: true }]
   }))
