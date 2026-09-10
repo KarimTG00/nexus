@@ -24,6 +24,7 @@ import { processTriggers } from '../pipeline/stages/trigger.js'
 import { trackOutcomes } from '../pipeline/stages/outcome.js'
 import { dispatchAlerts } from '../pipeline/stages/dispatch.js'
 import { syncIfNeeded } from '../collector/helius-webhook.js'
+import { pollSwaps } from '../collector/poll-solana.js'
 import * as health from '../repos/health.js'
 
 const log = mod('worker')
@@ -91,8 +92,16 @@ async function runCycle() {
  */
 async function syncCollector() {
   const cfg = await active()
-  const r = await syncIfNeeded(cfg)
-  log.info(r, 'synchronisation du collecteur')
+
+  // Deux modes de collecte, choisis par configuration.
+  //
+  //   'rpc'    sondage `getSignaturesForAddress` chez un fournisseur standard.
+  //            Le coût suit la cadence et le nombre de tokens, qu'on fixe.
+  //   'helius' webhook poussé. Le coût suit le volume de swaps, qu'on subit :
+  //            745 890 événements/jour, un million de crédits en 24 h.
+  const source = cfg.features?.swap_collector?.source ?? 'rpc'
+  const r = source === 'helius' ? await syncIfNeeded(cfg) : await pollSwaps(cfg)
+  log.info({ source, ...r }, 'collecteur')
   return r
 }
 
@@ -134,7 +143,11 @@ async function main() {
   scheduler.every('rapport', 6 * 3600_000, dailyReport, { runOnStart: false })
 
   // Au demarrage aussi : un deploiement peut avoir laisse passer des tokens.
-  const collecteurMin = cfg.thresholds?.collector?.sync_interval_min ?? 30
+  // La cadence dépend du mode : synchroniser un webhook coûte 100 crédits et
+  // se fait rarement ; sonder est l'acte de collecte lui-même et se fait souvent.
+  const collecteurMin = (cfg.features?.swap_collector?.source ?? 'rpc') === 'helius'
+    ? (cfg.thresholds?.collector?.sync_interval_min ?? 30)
+    : (cfg.thresholds?.collector?.poll_interval_min ?? 5)
   scheduler.every('collecteur', collecteurMin * 60_000, syncCollector, { runOnStart: true })
 
   const shutdown = async signal => {

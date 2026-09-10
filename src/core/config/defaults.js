@@ -29,7 +29,8 @@ export const CONFIG_V1 = {
     second_chance:  { enabled: true },
     watchdog:       { enabled: true },
     social_scoring: { enabled: false },   // activé au seuil 5M seulement
-    swap_collector: { enabled: true }     // P7
+    // `source` : 'rpc' (sondage, multi-fournisseur) ou 'helius' (webhook).
+    swap_collector: { enabled: true, source: 'rpc' }
   },
 
   thresholds: {
@@ -60,7 +61,15 @@ export const CONFIG_V1 = {
       // En deca, on attend : payer 100 credits pour deux adresses est un
       // mauvais echange, sauf si elles patientent depuis longtemps.
       min_new_addresses: 20,
-      max_wait_min: 120
+      max_wait_min: 120,
+
+      // Sondage RPC (remplace le webhook Helius).
+      // Le cout depend de la CADENCE et du NOMBRE DE TOKENS, choisis ici,
+      // et non du volume de swaps, qu'on subissait avec le webhook.
+      // Mesure sur 432 tokens : 5 min -> 124 416 appels/jour, 2 min -> 311 040.
+      poll_interval_min: 5,
+      poll_tokens_par_passage: 250,
+      poll_max_signatures: 100
     },
 
     trigger: [150_000, 500_000, 1_000_000, 5_000_000],

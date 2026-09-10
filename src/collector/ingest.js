@@ -16,6 +16,7 @@
  */
 
 import { parseBatch } from './parse.js'
+import { parseBatchRpc } from './parse-rpc.js'
 import * as positionsRepo from '../repos/positions.js'
 import { col } from '../core/db/client.js'
 import { cache } from '../core/cache/index.js'
@@ -52,12 +53,19 @@ export async function watchedMints({ ttlMs = 120_000, force = false, cfg = null 
  * Traite une charge utile de transactions (webhook ou interrogation).
  * @returns {{ transactions, swaps, positions, ignores }}
  */
-export async function ingest(transactions, { chain = 'solana' } = {}) {
+export async function ingest(transactions, { chain = 'solana', format = 'helius' } = {}) {
   const stats = { transactions: transactions?.length ?? 0, swaps: 0, positions: 0, ignores: 0, doublons: 0 }
   if (!stats.transactions) return stats
 
   const mints = await watchedMints()
-  const swaps = parseBatch(transactions, mints)
+  // Deux formats, un seul aval. Helius livre des transactions ENRICHIES
+  // (`events.swap`, `tokenTransfers`, `feePayer`) ; un RPC standard livre du
+  // brut, où le swap se reconstruit depuis les variations de solde. Choisir le
+  // mauvais parseur ne produit pas d'erreur, seulement zéro swap — d'où un
+  // format explicite plutôt qu'une détection silencieuse.
+  const swaps = format === 'rpc'
+    ? parseBatchRpc(transactions, mints)
+    : parseBatch(transactions, mints)
   stats.swaps = swaps.length
   stats.ignores = stats.transactions - new Set(swaps.map(s => s.signature)).size
 
@@ -120,36 +128,51 @@ let dernierRapport = 0
 const cumul = { lots: 0, transactions: 0, swaps: 0, positions: 0, doublons: 0, ignores: 0 }
 
 /** Point d'entrée du webhook : accumule et rend la main immédiatement. */
-export function enqueue(transactions, { chain = 'solana' } = {}) {
+export function enqueue(transactions, { chain = 'solana', format = 'helius' } = {}) {
   if (!transactions?.length) return { queued: 0, pending: file.length }
 
   for (const tx of transactions) {
     if (file.length >= FILE_MAX) {
       // Borne dure. Perdre les plus anciennes est regrettable, mais un arrêt
       // par épuisement mémoire perd TOUT le flux pendant le redémarrage, plus
-      // ce que Helius pousse entre-temps.
+      // ce que la source pousse entre-temps.
       file.shift()
       perdus++
     }
-    file.push(tx)
+    // Le format accompagne CHAQUE transaction, jamais le vidage. Une file
+    // commune peut mêler des sources : appliquer un format global en
+    // analyserait certaines avec le mauvais parseur, ce qui ne lève aucune
+    // erreur et rend simplement zéro swap.
+    file.push({ tx, chain, format })
   }
 
-  if (!minuteur && !enCours) minuteur = setTimeout(() => vider(chain), DELAI_MS)
-  else if (file.length >= LOT_MAX && !enCours) { clearTimeout(minuteur); minuteur = null; vider(chain) }
+  if (!minuteur && !enCours) minuteur = setTimeout(vider, DELAI_MS)
+  else if (file.length >= LOT_MAX && !enCours) { clearTimeout(minuteur); minuteur = null; vider() }
 
   return { queued: transactions.length, pending: file.length }
 }
 
-async function vider(chain) {
+async function vider() {
   minuteur = null
   if (enCours || !file.length) return
   enCours = true
 
   try {
     while (file.length) {
-      const lot = file.splice(0, LOT_MAX)
+      const brut = file.splice(0, LOT_MAX)
+
+      // Regroupement par (chaîne, format) : chaque sous-lot part au bon parseur.
+      const groupes = new Map()
+      for (const e of brut) {
+        const k = `${e.chain}|${e.format}`
+        const g = groupes.get(k) ?? { chain: e.chain, format: e.format, txs: [] }
+        g.txs.push(e.tx)
+        groupes.set(k, g)
+      }
+
+      for (const { chain, format, txs } of groupes.values()) {
       try {
-        const s = await ingest(lot, { chain })
+        const s = await ingest(txs, { chain, format })
         cumul.lots++
         cumul.transactions += s.transactions
         cumul.swaps += s.swaps
@@ -157,7 +180,8 @@ async function vider(chain) {
         cumul.doublons += s.doublons
         cumul.ignores += s.ignores
       } catch (e) {
-        log.error({ err: e.message, lot: lot.length }, 'lot en échec')
+        log.error({ err: e.message, lot: txs.length, format }, 'lot en échec')
+      }
       }
     }
   } finally {
@@ -172,7 +196,7 @@ async function vider(chain) {
     for (const k of Object.keys(cumul)) cumul[k] = 0
   }
 
-  if (file.length && !minuteur) minuteur = setTimeout(() => vider(chain), DELAI_MS)
+  if (file.length && !minuteur) minuteur = setTimeout(vider, DELAI_MS)
 }
 
 /** État de la file, pour la sonde. */
