@@ -17,7 +17,6 @@
  */
 
 import { col } from '../core/db/client.js'
-import { PROVIDERS } from '../adapters/rpc/providers.js'
 import { statutsSurveilles } from './scope.js'
 import { parseBatchEvm, grouperParTransaction, TRANSFER_TOPIC } from './parse-evm.js'
 import { enregistrerSwaps } from './ingest.js'

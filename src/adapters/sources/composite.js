@@ -29,6 +29,15 @@ export class CompositeSource {
   }
 
   // --- délégué sans repli : Mobula est seul à savoir faire ------------------
+  //
+  // ⚠️ Toute méthode absente ici est INVISIBLE pour le pipeline, sans erreur.
+  // `getNewListingsPost` manquait : `discovery.js` teste sa présence avant de
+  // l'appeler, le test échouait, et la découverte repliait sur le GET paginé
+  // à CHAQUE cycle. La voie POST — 10 vues pour 1 crédit — n'a jamais servi en
+  // production, alors que le GET consomme jusqu'à un crédit par page et par
+  // chaîne. Le seul signe était un avertissement « POST sans résultat », qui
+  // décrivait un appel qui n'avait pas eu lieu.
+  getNewListingsPost(...a) { return this.primary.getNewListingsPost(...a) }
   getNewListings(...a) { return this.primary.getNewListings(...a) }
   getMarketData(...a) { return this.primary.getMarketData(...a) }
 
