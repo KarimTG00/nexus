@@ -161,10 +161,19 @@ export async function syncIfNeeded(cfg) {
   }
 
   const known = new Set(current.accountAddresses ?? [])
+  const vivantes = new Set(addresses)
   const manquantes = addresses.filter(a => !known.has(a))
 
+  // Les adresses devenues obsoletes comptent AUTANT que celles qui manquent.
+  // La synchronisation ne regardait que les ajouts, donc un token archive
+  // restait enregistre indefiniment et Helius continuait a livrer ses swaps.
+  // Mesure sur 92 502 positions : 65 % venaient de tokens `archived` et 23 %
+  // de `quarantine` — 88 % du flux, et des credits, pour des tokens ecartes.
+  const obsoletes = [...known].filter(a => !vivantes.has(a))
+  const derive = manquantes.length + obsoletes.length
+
   const s = await state()
-  if (!manquantes.length) {
+  if (!derive) {
     if (s.pending_since) {
       await col('system_state').updateOne({ _id: STATE_ID }, { $unset: { pending_since: '' } })
     }
@@ -172,20 +181,21 @@ export async function syncIfNeeded(cfg) {
   }
 
   const depuis = s.pending_since ? Date.now() - new Date(s.pending_since).getTime() : 0
-  if (manquantes.length < minNew && depuis < maxWaitMs) {
+  if (derive < minNew && depuis < maxWaitMs) {
     if (!s.pending_since) {
       await col('system_state').updateOne({ _id: STATE_ID },
         { $set: { pending_since: new Date() } }, { upsert: true })
     }
     return { skipped: true, reason: 'delta insuffisant',
-             manquantes: manquantes.length, seuil: minNew,
-             attente_min: Math.round(depuis / 60_000) }
+             manquantes: manquantes.length, obsoletes: obsoletes.length,
+             seuil: minNew, attente_min: Math.round(depuis / 60_000) }
   }
 
   const r = await sync({ webhookID, webhookURL: url, force: true })
   await col('system_state').updateOne({ _id: STATE_ID },
-    { $set: { last_sync_at: new Date(), addresses: addresses.length },
+    { $set: { last_sync_at: new Date(), addresses: addresses.length,
+              dernieres_obsoletes: obsoletes.length },
       $unset: { pending_since: '' },
       $inc: { helius_credits: 100, syncs: 1 } }, { upsert: true })
-  return { ...r, manquantes: manquantes.length, credits: 100 }
+  return { ...r, manquantes: manquantes.length, obsoletes: obsoletes.length, credits: 100 }
 }
