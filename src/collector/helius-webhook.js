@@ -9,6 +9,7 @@
 
 import { request } from '../core/net/http.js'
 import { col } from '../core/db/client.js'
+import { statutsSurveilles } from './scope.js'
 import { mod } from '../core/logger.js'
 
 const log = mod('collector:webhook')
@@ -16,10 +17,10 @@ const BASE = 'https://api.helius.xyz/v0/webhooks'
 
 const key = () => process.env.HELIUS_KEY
 
-/** Adresses à surveiller : les mints Solana encore vivants. */
-export async function addressesToWatch({ limit = 100_000 } = {}) {
+/** Adresses à surveiller : les mints Solana du périmètre retenu (voir scope.js). */
+export async function addressesToWatch({ limit = 100_000, cfg = null } = {}) {
   const docs = await col('tokens').find(
-    { chain: 'solana', status: { $in: ['pending_activity', 'tracked', 'triggered', 'alerted'] } },
+    { chain: 'solana', status: { $in: statutsSurveilles(cfg) } },
     { projection: { address: 1 } }
   ).limit(limit).toArray()
   return docs.map(d => d.address)
@@ -39,8 +40,8 @@ export async function get(id) {
  * Aligne le webhook sur la liste courante.
  * @param {string} webhookURL  URL publique du service (route /webhooks/helius)
  */
-export async function sync({ webhookID, webhookURL, force = false } = {}) {
-  const addresses = await addressesToWatch()
+export async function sync({ webhookID, webhookURL, force = false, cfg = null } = {}) {
+  const addresses = await addressesToWatch({ cfg })
   if (!addresses.length) return { skipped: true, reason: 'aucune adresse à surveiller' }
 
   const body = {
@@ -146,9 +147,9 @@ export async function syncIfNeeded(cfg) {
   const maxWaitMs = (seuils.max_wait_min ?? 120) * 60_000
 
   const webhookID = await resolveWebhookId()
-  if (!webhookID) return sync({ webhookURL: url })   // creation : rien a arbitrer
+  if (!webhookID) return sync({ webhookURL: url, cfg })   // creation : rien a arbitrer
 
-  const addresses = await addressesToWatch()
+  const addresses = await addressesToWatch({ cfg })
   if (!addresses.length) return { skipped: true, reason: 'aucune adresse a surveiller' }
 
   const current = await get(webhookID).catch(() => null)
@@ -157,7 +158,7 @@ export async function syncIfNeeded(cfg) {
     log.warn({ webhookID }, 'webhook introuvable — recreation')
     await col('system_state').updateOne({ _id: STATE_ID },
       { $unset: { webhook_id: '' } }, { upsert: true })
-    return sync({ webhookURL: url })
+    return sync({ webhookURL: url, cfg })
   }
 
   const known = new Set(current.accountAddresses ?? [])
@@ -191,7 +192,7 @@ export async function syncIfNeeded(cfg) {
              seuil: minNew, attente_min: Math.round(depuis / 60_000) }
   }
 
-  const r = await sync({ webhookID, webhookURL: url, force: true })
+  const r = await sync({ webhookID, webhookURL: url, force: true, cfg })
   await col('system_state').updateOne({ _id: STATE_ID },
     { $set: { last_sync_at: new Date(), addresses: addresses.length,
               dernieres_obsoletes: obsoletes.length },

@@ -20,6 +20,8 @@ import * as positionsRepo from '../repos/positions.js'
 import { col } from '../core/db/client.js'
 import { cache } from '../core/cache/index.js'
 import { tokenId } from '../core/chains.js'
+import { statutsSurveilles } from './scope.js'
+import { active } from '../core/config/store.js'
 import { mod } from '../core/logger.js'
 
 const log = mod('collector')
@@ -28,11 +30,16 @@ const log = mod('collector')
 const WATCH_KEY = 'collector:watched:solana'
 let watched = { set: new Set(), at: 0 }
 
-export async function watchedMints({ ttlMs = 120_000, force = false } = {}) {
+export async function watchedMints({ ttlMs = 120_000, force = false, cfg = null } = {}) {
   if (!force && watched.set.size && Date.now() - watched.at < ttlMs) return watched.set
 
+  // La configuration décide du périmètre. La lire ici, plutôt que de se fier à
+  // un défaut, empêche la liste déclarée à Helius et le filtre d'arrivée de
+  // diverger : on paierait des livraisons qu'on jette, ou l'inverse.
+  const conf = cfg ?? await active().catch(() => null)
+
   const docs = await col('tokens').find(
-    { chain: 'solana', status: { $in: ['pending_activity', 'tracked', 'triggered', 'alerted'] } },
+    { chain: 'solana', status: { $in: statutsSurveilles(conf) } },
     { projection: { address: 1 } }
   ).toArray()
 
