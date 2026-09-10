@@ -82,14 +82,21 @@ async function runCycle() {
 }
 
 /**
- * Tient la liste d adresses du webhook Helius alignee sur les tokens vivants.
+ * Collecte des swaps, sur toutes les chaînes.
  *
- * Porte par le pipeline et non par le service web : c est lui qui sait quels
- * tokens viennent d etre decouverts ou promus. Le service web, lui, se
- * contente de RECEVOIR ce que Helius pousse.
+ * Portée par le pipeline et non par le service web : c'est lui qui sait quels
+ * tokens viennent d'être découverts, promus ou archivés, et la liste surveillée
+ * suit ces mouvements.
  *
- * Volontairement hors du cycle : une mise a jour coute 100 credits Helius,
- * la lier a la cadence de decouverte reviendrait a payer toutes les 6 min.
+ * Deux mécanismes, imposés par ce que les fournisseurs offrent réellement :
+ *   Solana  sondage RPC — Alchemy n'implémente aucun abonnement Solana.
+ *           Le coût suit la cadence et le nombre de tokens.
+ *   EVM     abonnement `eth_subscribe` — filtre appliqué chez le fournisseur,
+ *           journaux livrés dans la connexion. Le coût cesse de suivre le
+ *           volume de swaps, seul chemin du système à avoir cette propriété.
+ *
+ * Volontairement hors du cycle de découverte : ni l'un ni l'autre n'a la même
+ * cadence utile que la recherche de nouveaux tokens.
  */
 async function syncCollector() {
   const cfg = await active()
