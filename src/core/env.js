@@ -6,8 +6,14 @@
 const SPEC = {
   MONGODB_URI:       { required: true,  desc: 'URI du cluster MongoDB' },
   MOBULA_KEY:        { required: true,  desc: 'clé API Mobula (découverte + market data)' },
-  HELIUS_KEY:        { required: true,  desc: 'clé API Helius (RPC Solana : mint/freeze authority)' },
-  HELIUS_WEBHOOK_ID: { required: false, desc: 'webhook Helius — collecteur de swaps (P7)' },
+  ALCHEMY_KEY:       { required: false, desc: 'clé Alchemy — RPC Solana et EVM (sécurité + collecte de swaps)' },
+  QUICKNODE_URL:     { required: false, desc: 'URL complète d\'un point d\'accès QuickNode' },
+  ANKR_KEY:          { required: false, desc: 'clé Ankr' },
+  // Plus obligatoire : la collecte passe par le sondage RPC, et les contrôles
+  // de sécurité par le registre de fournisseurs. Une clé encore présente sert
+  // de repli ; absente, rien ne casse.
+  HELIUS_KEY:        { required: false, desc: 'clé Helius — repli RPC Solana, plus nécessaire' },
+  HELIUS_WEBHOOK_ID: { required: false, desc: 'webhook Helius — mode de collecte historique' },
   PUBLIC_URL:        { required: false, desc: 'URL publique du service web — ou Helius pousse les swaps' },
   REDIS_URL:         { required: false, desc: 'Redis — rate limiter partagé (P1). Repli mémoire si absent.' },
   TELEGRAM_BOT_TOKEN: { required: false, desc: 'bot Telegram (P8) — alias accepte : TELEGRAM_TOKEN' },

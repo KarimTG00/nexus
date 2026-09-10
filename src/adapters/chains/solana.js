@@ -1,23 +1,39 @@
 /**
- * Adapter Solana — contrôles de sécurité de base via RPC Helius.
+ * Adapter Solana — contrôles de sécurité de base par RPC.
  *
  * Les deux seuls contrôles que Mobula ne fournit pas (`security` est null sur
  * les tokens frais), et les moins chers du système : une lecture de compte.
  *
  * getMultipleAccounts accepte 100 adresses par appel → 600 tokens/jour = 6 appels.
+ *
+ * `getMultipleAccounts` est une méthode Solana standard, servie par n'importe
+ * quel fournisseur. L'adapter passe donc par le registre plutôt que par une
+ * URL Helius codée en dur : quand le quota Helius s'est épuisé, les 20 derniers
+ * tokens Solana admis portaient tous `checked: false, reason: 'rpc_error'` —
+ * admis sans qu'on ait pu lire leur mint ou freeze authority.
  */
 
 import { request } from '../../core/net/http.js'
+import { fournisseur } from '../rpc/providers.js'
 import { mod } from '../../core/logger.js'
 
 const log = mod('chain:solana')
 
+/** Repli : une clé Helius encore présente reste utilisable. */
+const heliusUrl = k => (k ? `https://mainnet.helius-rpc.com/?api-key=${k}` : null)
+
 export class SolanaAdapter {
-  constructor({ apiKey } = {}) {
+  constructor({ apiKey, rpcUrl } = {}) {
     this.family = 'solana'
     this.chain = 'solana'
-    this.rpc = apiKey ? `https://mainnet.helius-rpc.com/?api-key=${apiKey}` : null
+
+    // Ordre : URL imposée, puis fournisseur configuré, puis Helius s'il reste.
+    this.rpc = rpcUrl ?? fournisseur()?.httpUrl ?? heliusUrl(apiKey)
     this.available = Boolean(this.rpc)
+
+    if (!this.available) {
+      log.warn('aucun RPC Solana — mint et freeze authority ne seront pas contrôlés')
+    }
   }
 
   async #rpc(method, params) {
