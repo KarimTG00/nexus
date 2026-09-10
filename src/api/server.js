@@ -20,7 +20,7 @@
 import { createServer } from 'node:http'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ingest, verifyWebhook } from '../collector/ingest.js'
+import { enqueue, queueStats, verifyWebhook } from '../collector/ingest.js'
 import { handleUpdate } from '../bot/commands.js'
 import * as health from '../repos/health.js'
 import * as positionsRepo from '../repos/positions.js'
@@ -46,7 +46,10 @@ function etatWeb() {
     cache_entrees: c?.store?.size ?? null,
     cache_evictions: c?.evictions ?? null,
     rss_mb: Math.round(process.memoryUsage().rss / 1048576),
-    uptime_min: +(process.uptime() / 60).toFixed(1)
+    uptime_min: +(process.uptime() / 60).toFixed(1),
+    // File d'ingestion : `pending` qui monte sans redescendre annonce que
+    // l'ecriture ne suit plus le flux entrant, avant que la memoire ne cede.
+    ingestion: queueStats()
   }
 }
 
@@ -130,10 +133,12 @@ export function createApiServer({ port = process.env.PORT ?? 3000 } = {}) {
         // tout de suite et on traite ensuite.
         json(res, 200, { received: Array.isArray(body) ? body.length : 1 })
 
+        // On met en file plutôt que de lancer un traitement par appel : Helius
+        // envoie une transaction à la fois, en rafale, et le parallélisme non
+        // borné qui en résultait a tué ce service. `enqueue` est synchrone et
+        // rend la main tout de suite ; le lot part au plus tard 500 ms après.
         const txs = Array.isArray(body) ? body : [body]
-        ingest(txs)
-          .then(s => { if (s.swaps) log.info(s, 'swaps ingérés') })
-          .catch(e => log.error({ err: e.message }, 'ingestion en échec'))
+        enqueue(txs)
         return
       }
 
