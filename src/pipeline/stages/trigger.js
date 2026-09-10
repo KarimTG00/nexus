@@ -205,6 +205,9 @@ export async function processTriggers(cfg, { limit = 200 } = {}) {
 
     const ctx = {
       _id: token._id, chain: token.chain, address: token.address,
+      // La capitalisation du moment et le palier franchi : `mc_too_high` en a
+      // besoin pour juger la hauteur atteinte, que le palier seul ne dit pas.
+      mc, threshold_franchi: threshold,
       velocity,
       holders: token.holders,
       bonding: token.bonding,

@@ -88,7 +88,7 @@ class Flux {
 
   async chargerMeta(cfg) {
     const docs = await col('tokens').find(
-      { chain: this.chaine, status: { $in: statutsSurveilles(cfg) } },
+      { chain: this.chaine, status: { $in: statutsSurveilles(cfg, this.chaine) } },
       { projection: { address: 1, decimals: 1, 'pools.address': 1 } }
     ).toArray()
 

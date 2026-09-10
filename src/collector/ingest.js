@@ -40,7 +40,7 @@ export async function watchedMints({ ttlMs = 120_000, force = false, cfg = null 
   const conf = cfg ?? await active().catch(() => null)
 
   const docs = await col('tokens').find(
-    { chain: 'solana', status: { $in: statutsSurveilles(conf) } },
+    { chain: 'solana', status: { $in: statutsSurveilles(conf, 'solana') } },
     { projection: { address: 1 } }
   ).toArray()
 

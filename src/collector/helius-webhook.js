@@ -20,7 +20,7 @@ const key = () => process.env.HELIUS_KEY
 /** Adresses à surveiller : les mints Solana du périmètre retenu (voir scope.js). */
 export async function addressesToWatch({ limit = 100_000, cfg = null } = {}) {
   const docs = await col('tokens').find(
-    { chain: 'solana', status: { $in: statutsSurveilles(cfg) } },
+    { chain: 'solana', status: { $in: statutsSurveilles(cfg, 'solana') } },
     { projection: { address: 1 } }
   ).limit(limit).toArray()
   return docs.map(d => d.address)

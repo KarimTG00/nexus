@@ -29,12 +29,24 @@ export const SURVEILLES_ETROIT = ['tracked', 'triggered', 'alerted']
 export const SURVEILLES_LARGE = ['pending_activity', 'tracked', 'triggered', 'alerted']
 
 /**
- * Statuts effectivement surveillés.
+ * Statuts effectivement surveillés, PAR CHAÎNE.
  *
- * Pilotés par la configuration pour qu'un changement d'avis ne demande pas un
- * déploiement de code — `active()` ne fusionnant pas avec les valeurs par
- * défaut, le repli couvre les versions antérieures.
+ * Le bon périmètre n'est pas le même partout, parce que le mode de collecte
+ * ne l'est pas :
+ *
+ *   Solana  sondage RPC — un appel par token et par passage. Élargir le
+ *           périmètre multiplie le coût. D'où l'étroit par défaut.
+ *   EVM     abonnement `eth_subscribe` — un filtre côté serveur, quel que
+ *           soit le nombre d'adresses. Élargir ne coûte rien de plus, et
+ *           rend les entrées pré-promotion à M2, soit 81 % des entrées.
+ *
+ * `watch_statuses` accepte donc les deux formes :
+ *   ['tracked', …]                       même périmètre partout
+ *   { defaut: [...], base: [...], … }    par chaîne, avec repli sur `defaut`
  */
-export function statutsSurveilles(cfg) {
-  return cfg?.thresholds?.collector?.watch_statuses ?? SURVEILLES_ETROIT
+export function statutsSurveilles(cfg, chaine = null) {
+  const v = cfg?.thresholds?.collector?.watch_statuses
+  if (!v) return chaine && chaine !== 'solana' ? SURVEILLES_LARGE : SURVEILLES_ETROIT
+  if (Array.isArray(v)) return v
+  return v[chaine] ?? v.defaut ?? SURVEILLES_ETROIT
 }

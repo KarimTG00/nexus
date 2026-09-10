@@ -151,7 +151,7 @@ async function lotRpc(url, appels) {
  */
 export async function aSonder(cfg, limite) {
   return col('tokens').find(
-    { chain: 'solana', status: { $in: statutsSurveilles(cfg) } },
+    { chain: 'solana', status: { $in: statutsSurveilles(cfg, 'solana') } },
     { projection: { address: 1, symbol: 1, swap_last_sig: 1, swap_polled_at: 1 } }
   ).sort({ swap_polled_at: 1 }).limit(limite).toArray()
 }
