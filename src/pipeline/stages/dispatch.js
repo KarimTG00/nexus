@@ -53,7 +53,11 @@ export async function dispatchAlerts(cfg, { limit = 20 } = {}) {
                   echecs: 0, calibration: 0, perimes: 0 }
 
   const pending = await col('trigger_snapshots').aggregate([
-    { $match: { decision: 'alerted' } },
+    // `dispatch_abandoned_at` écarte les décisions dont l'envoi ne partira
+    // plus jamais. Sans lui, les 11 décisions de l'ère calibration revenaient
+    // à chaque cycle pour être refusées à nouveau, occupant des places sous
+    // `$limit` et laissant `candidats: 11` en permanence dans l'entonnoir.
+    { $match: { decision: 'alerted', dispatch_abandoned_at: { $exists: false } } },
     { $sort: { ts: -1 } },
     { $limit: limit },
     { $lookup: { from: 'alerts', localField: '_id', foreignField: 'trigger_id', as: 'sent' } },
@@ -86,7 +90,19 @@ export async function dispatchAlerts(cfg, { limit = 20 } = {}) {
   let horaire = await sentLastHour()
 
   for (const snap of pending.reverse()) {          // du plus ancien au plus récent
-    if (Date.now() - new Date(snap.ts).getTime() > maxAgeMs) { stats.perimes++; continue }
+    if (Date.now() - new Date(snap.ts).getTime() > maxAgeMs) {
+      // Une décision périmée ne redeviendra jamais fraîche : on la classe une
+      // fois pour toutes. Le champ s'ajoute A COTE de la décision, qui reste
+      // intacte — `trigger_snapshots` est un registre append-only, on n'y
+      // réécrit jamais ce qui a été décidé, seulement ce qu'on en a fait.
+      await col('trigger_snapshots').updateOne({ _id: snap._id }, { $set: {
+        dispatch_abandoned_at: new Date(),
+        dispatch_abandoned_reason: 'perimee',
+        dispatch_age_minutes: Math.round((Date.now() - new Date(snap.ts).getTime()) / 60_000)
+      } })
+      stats.perimes++
+      continue
+    }
     if (horaire >= cap) { stats.plafond++; continue }
     if (await isMuted(snap.token)) { stats.muets++; continue }
     if (await inCooldown(snap.token, snap.threshold, cooldown)) { stats.cooldown++; continue }
