@@ -94,14 +94,26 @@ export function createApiServer({ port = process.env.PORT ?? 3000 } = {}) {
     try {
       // --- sonde de la plateforme : jamais authentifiée --------------------
       // Railway et les supervisions doivent pouvoir l'interroger.
+      // Le code HTTP ne juge QUE ce processus-ci : sait-il encore servir ?
+      //
+      // Il renvoyait 503 des que le battement du PIPELINE datait de plus de
+      // 20 min — un service web parfaitement sain se declarait en panne parce
+      // que l'AUTRE service etait silencieux. Une plateforme qui sonde cette
+      // route y lit un ordre de redemarrage, et tue le web a chaque creux du
+      // pipeline : le seul processus qui recoit les webhooks Helius, donc
+      // autant de swaps perdus, pour un incident qui ne le concernait pas.
+      //
+      // L'etat du pipeline reste expose, comme DONNEE, dans la charge utile.
       if (path === '/health') {
         const h = await health.health()
-        // `health()` decrit le PIPELINE. Sans les lignes ci-dessous, la sonde
-        // ne disait rien du processus qui la sert — or c'est lui qui est mort
-        // par epuisement memoire, et son repli sur le cache memoire est
-        // silencieux. Un `cache: "memoire"` ici annonce la rechute AVANT
-        // qu'elle tue le service.
-        return json(res, h.alive ? 200 : 503, { ...h, web: etatWeb() })
+        return json(res, 200, { alive: true, web: etatWeb(), pipeline: h })
+      }
+
+      // Sonde dediee au pipeline, pour la supervision : ici un 503 est le bon
+      // signal, et personne ne le confond avec la sante du service web.
+      if (path === '/health/pipeline') {
+        const h = await health.health()
+        return json(res, h.alive ? 200 : 503, h)
       }
 
       // --- webhook Helius : accuser réception AVANT de traiter -------------
