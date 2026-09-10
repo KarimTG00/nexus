@@ -130,7 +130,13 @@ export default function TokenList({ selection, onSelect }) {
               <div className="mt-1 flex items-center justify-between gap-2 text-[11px]">
                 <span className="flex min-w-0 items-center gap-2 truncate">
                   <ChainDot chain={t.chain} chaines={CHAINES} />
-                  <span className="text-ink-faint">{age(t.createdAt)}</span>
+                  {/* Depuis quand NOUS le suivons. `createdAt` est la date du
+                      POOL chez Mobula, pas celle du token : sur un jeton ancien
+                      qui reçoit un nouveau pool, elle annonce quelques heures
+                      pour un token vieux de plusieurs années. */}
+                  <span className="text-ink-faint" title={`pool créé ${age(t.createdAt)}`}>
+                    vu {age(t.discoveredAt)}
+                  </span>
                 </span>
                 <span className="flex shrink-0 items-center gap-2">
                   {t.interest !== null && (

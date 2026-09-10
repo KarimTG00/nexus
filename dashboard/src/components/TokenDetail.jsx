@@ -169,7 +169,14 @@ export default function TokenDetail({ id }) {
             <ChainDot chain={t.chain} chaines={CHAINES} />
             <span className="font-mono">{court(t.address)}</span>
             {t.launchpad && <span>{t.launchpad}</span>}
-            <span>créé il y a {age(t.createdAt)}</span>
+            {/* Deux dates distinctes, jamais confondues : `discoveredAt` est
+                notre insertion en base, `createdAt` la création du POOL chez
+                Mobula — laquelle vaut quelques heures sur un jeton ancien qui
+                reçoit un nouveau pool. */}
+            <span title={dateHeure(t.discoveredAt)}>en base depuis {age(t.discoveredAt)}</span>
+            <span className="text-ink-faint/70" title={dateHeure(t.createdAt)}>
+              pool créé il y a {age(t.createdAt)}
+            </span>
             {lien && (
               <a href={lien} target="_blank" rel="noreferrer"
                 className="text-accent hover:underline">DexScreener ↗</a>
