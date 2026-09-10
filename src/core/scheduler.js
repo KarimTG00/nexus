@@ -47,10 +47,40 @@ export class Scheduler {
     const tick = async () => {
       if (this.stopping) return
 
+      // REPLANIFIER D'ABORD, exécuter ensuite.
+      //
+      // Cette ligne se trouvait après `await fn()`. Un cycle qui ne rendait
+      // jamais la main — une opération sans délai maximal — ne l'atteignait
+      // donc pas : plus aucun timer n'était armé et la tâche mourait en
+      // silence, processus toujours vivant. Observé en production : cycle 269
+      // terminé proprement en 34 s, puis plus rien pendant une heure, service
+      // affiché « Online ». Armer le timer avant l'exécution fait survivre la
+      // cadence à un blocage ; l'anti-chevauchement ci-dessous empêche
+      // l'empilement.
+      task.nextDue += intervalMs
+      let wait = task.nextDue - Date.now()
+      if (wait < 0) {
+        task.overruns++
+        task.nextDue = Date.now() + intervalMs
+        wait = intervalMs
+        log.warn({ tache: name, depassements: task.overruns, dureeMs: task.lastDurationMs },
+          'cycle plus long que son intervalle')
+      }
+      task.timer = setTimeout(tick, Math.max(0, wait))
+
       // Anti-chevauchement : on saute plutôt que d'empiler
       if (task.running) {
         task.skipped++
-        log.warn({ tache: name, sautes: task.skipped }, 'cycle précédent encore en cours — cycle sauté')
+        // Un cycle encore en cours après plusieurs intervalles n'est plus lent :
+        // il est bloqué. Le dire explicitement évite de lire « cycle sauté »
+        // pendant des heures sans comprendre que rien n'avance.
+        const depuis = task.lastStart ? Date.now() - task.lastStart.getTime() : 0
+        if (depuis > 3 * intervalMs) {
+          log.error({ tache: name, bloqueDepuisMin: +(depuis / 60_000).toFixed(1), sautes: task.skipped },
+            'cycle bloqué — aucune progression depuis plusieurs intervalles')
+        } else {
+          log.warn({ tache: name, sautes: task.skipped }, 'cycle précédent encore en cours — cycle sauté')
+        }
       } else {
         task.running = true
         task.lastStart = new Date()
@@ -71,22 +101,10 @@ export class Scheduler {
         }
       }
 
-      // CADENCE FIXE, pas « intervalle après la fin ». Replanifier depuis la
-      // fin ajouterait la durée du cycle à chaque tour : 110 s de traitement
-      // plus 300 s d'attente donnent 410 s réels, et le rythme dérive.
-      // On vise l'échéance suivante et on rattrape si on a débordé.
-      if (this.stopping) return
-      task.nextDue += intervalMs
-      const wait = task.nextDue - Date.now()
-      if (wait < 0) {
-        // Cycle plus long que son intervalle : on repart immédiatement et on
-        // se recale sur l'échéance suivante plutôt que d'accumuler du retard.
-        task.overruns++
-        task.nextDue = Date.now() + intervalMs
-        log.warn({ tache: name, depassements: task.overruns, dureeMs: task.lastDurationMs },
-          'cycle plus long que son intervalle')
-      }
-      task.timer = setTimeout(tick, Math.max(0, wait))
+      // La cadence reste FIXE : l'échéance suivante a été calculée en entrée
+      // de tick, jamais depuis la fin du traitement. Replanifier depuis la fin
+      // ajouterait la durée du cycle à chaque tour — 110 s de traitement plus
+      // 300 s d'attente donnent 410 s réels, et le rythme dérive.
     }
 
     task.nextDue = Date.now() + (runOnStart ? 0 : intervalMs)
