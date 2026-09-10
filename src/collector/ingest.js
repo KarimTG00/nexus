@@ -69,19 +69,38 @@ export async function ingest(transactions, { chain = 'solana', format = 'helius'
   stats.swaps = swaps.length
   stats.ignores = stats.transactions - new Set(swaps.map(s => s.signature)).size
 
-  if (!swaps.length) return stats
+  const ecrit = await enregistrerSwaps(swaps, { chain })
+  stats.positions = ecrit.positions
+  stats.doublons = ecrit.doublons
+  return stats
+}
 
-  // Déduplication : un webhook peut renvoyer la même transaction (réessai
-  // Helius, redémarrage). Sans ça, une position serait comptée deux fois.
+/**
+ * Swaps normalisés → `positions`. Tronçon commun aux trois parseurs.
+ *
+ * Solana enrichi, Solana brut et journaux EVM produisent la même forme ; seule
+ * la manière de l'obtenir diffère. Ce qui suit — déduplication, capitalisation
+ * à l'entrée, écriture groupée — ne doit exister qu'une fois, sinon les trois
+ * chemins divergeraient sur des détails qui comptent, comme le `mcAtEntry`
+ * dont dépend entièrement la mesure de précocité de M2.
+ *
+ * @param {Array} swaps  { wallet, mint, side, amount, ts, signature }
+ */
+export async function enregistrerSwaps(swaps, { chain = 'solana' } = {}) {
+  const out = { swaps: swaps?.length ?? 0, positions: 0, doublons: 0 }
+  if (!out.swaps) return out
+
+  // Déduplication : une même transaction peut arriver deux fois — réessai du
+  // fournisseur, redémarrage, chevauchement de deux sondages. Sans ça, une
+  // position serait comptée deux fois et le PnL faussé.
   const nouveaux = []
   for (const s of swaps) {
-    const key = `swap:${s.signature}:${s.mint}:${s.side}`
-    const vu = await cache().get(key)
-    if (vu) { stats.doublons++; continue }
+    const key = `swap:${chain}:${s.signature}:${s.mint}:${s.side}`
+    if (await cache().get(key)) { out.doublons++; continue }
     await cache().set(key, '1', 86_400)
     nouveaux.push(s)
   }
-  if (!nouveaux.length) return stats
+  if (!nouveaux.length) return out
 
   // MC à l'entrée : la précocité de M2 en dépend entièrement.
   const ids = [...new Set(nouveaux.map(s => tokenId(chain, s.mint)))]
@@ -96,8 +115,8 @@ export async function ingest(transactions, { chain = 'solana', format = 'helius'
   }))
 
   const r = await positionsRepo.bulkApply(ops)
-  stats.positions = r.matched + r.upserted
-  return stats
+  out.positions = r.matched + r.upserted
+  return out
 }
 
 // ---------------------------------------------------------------------------

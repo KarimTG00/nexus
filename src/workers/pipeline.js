@@ -25,6 +25,7 @@ import { trackOutcomes } from '../pipeline/stages/outcome.js'
 import { dispatchAlerts } from '../pipeline/stages/dispatch.js'
 import { syncIfNeeded } from '../collector/helius-webhook.js'
 import { pollSwaps } from '../collector/poll-solana.js'
+import { syncEvm, statsEvm, arreterEvm } from '../collector/subscribe-evm.js'
 import * as health from '../repos/health.js'
 
 const log = mod('worker')
@@ -101,8 +102,14 @@ async function syncCollector() {
   //            745 890 événements/jour, un million de crédits en 24 h.
   const source = cfg.features?.swap_collector?.source ?? 'rpc'
   const r = source === 'helius' ? await syncIfNeeded(cfg) : await pollSwaps(cfg)
-  log.info({ source, ...r }, 'collecteur')
-  return r
+
+  // Les chaînes EVM sont collectées par abonnement, en parallèle du sondage
+  // Solana. `syncEvm` est idempotente : elle réaligne les filtres sur la liste
+  // de tokens courante, qui bouge à chaque promotion et chaque archivage.
+  const evm = await syncEvm(cfg).catch(e => ({ erreur: e.message }))
+
+  log.info({ source, ...r, evm: evm.skipped ? evm.reason : statsEvm() }, 'collecteur')
+  return { ...r, evm }
 }
 
 /** Rapport quotidien du mode calibration : où le flux s'étrangle. */
@@ -152,6 +159,7 @@ async function main() {
 
   const shutdown = async signal => {
     log.info({ signal }, 'arrêt demandé')
+    arreterEvm()
     await scheduler.stop()
     await db.close()
     await cache.close()
