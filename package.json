@@ -21,7 +21,10 @@
     "start:api": "node src/workers/api.js",
     "p8": "node --env-file=.env src/scripts/p8-check.js",
     "analytics": "node --env-file=.env src/workers/analytics.js",
-    "p9": "node --env-file=.env src/scripts/p9-check.js"
+    "p9": "node --env-file=.env src/scripts/p9-check.js",
+    "p10": "node --env-file=.env src/scripts/p10-check.js",
+    "stream": "node --env-file=.env src/workers/stream.js",
+    "stream:config": "node --env-file=.env src/scripts/stream-config.js"
   },
   "dependencies": {
     "ioredis": "^5.4.1",

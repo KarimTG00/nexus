@@ -26,6 +26,7 @@ import { dispatchAlerts } from '../pipeline/stages/dispatch.js'
 import { syncIfNeeded } from '../collector/helius-webhook.js'
 import { pollSwaps } from '../collector/poll-solana.js'
 import { syncEvm, statsEvm, arreterEvm } from '../collector/subscribe-evm.js'
+import { demarrerFlux, arreterFlux, actualiserConfig, fluxActif } from '../collector/pump/stream.js'
 import * as health from '../repos/health.js'
 
 const log = mod('worker')
@@ -101,6 +102,10 @@ async function runCycle() {
 async function syncCollector() {
   const cfg = await active()
 
+  // Le flux temps réel ne recharge pas la configuration de lui-même : on lui
+  // transmet ici chaque nouvelle version, au rythme du collecteur.
+  actualiserConfig(cfg)
+
   // Deux modes de collecte, choisis par configuration.
   //
   //   'rpc'    sondage `getSignaturesForAddress` chez un fournisseur standard.
@@ -164,9 +169,19 @@ async function main() {
     : (cfg.thresholds?.collector?.poll_interval_min ?? 5)
   scheduler.every('collecteur', collecteurMin * 60_000, syncCollector, { runOnStart: true })
 
+  // Flux temps réel pump.fun : hors des cycles, il vit de ses connexions.
+  // Un échec au démarrage n'arrête pas le pipeline — la découverte Mobula
+  // continue de couvrir pump.fun, avec son retard habituel.
+  if (fluxActif(cfg)) {
+    demarrerFlux(cfg).catch(e => log.error({ err: e.message, stack: e.stack }, 'flux pump.fun impossible à démarrer'))
+  } else {
+    log.warn('flux pump.fun désactivé (configuration ou STREAM=off)')
+  }
+
   const shutdown = async signal => {
     log.info({ signal }, 'arrêt demandé')
     arreterEvm()
+    await arreterFlux()
     await scheduler.stop()
     await db.close()
     await cache.close()

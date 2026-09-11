@@ -111,7 +111,9 @@ export async function capitalisationsDepart(tokenIds) {
  * Lue sur le snapshot de déclenchement, qui la fige (`context.mc`).
  */
 export async function capitalisationsAlerte() {
-  const alertes = await col('alerts').find({}, {
+  // Les alertes de SORTIE (×10, ventes d'auteurs) ne sont pas des entrées :
+  // les compter ferait passer une sortie pour la première alerte d'un token.
+  const alertes = await col('alerts').find({ kind: { $nin: ['exit_x10', 'exit_authors'] } }, {
     projection: { token: 1, trigger_id: 1, symbol: 1, chain: 1, threshold: 1, score: 1, sent_at: 1 }
   }).toArray()
   if (!alertes.length) return []

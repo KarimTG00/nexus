@@ -57,7 +57,9 @@ export async function dispatchAlerts(cfg, { limit = 20 } = {}) {
     // plus jamais. Sans lui, les 11 décisions de l'ère calibration revenaient
     // à chaque cycle pour être refusées à nouveau, occupant des places sous
     // `$limit` et laissant `candidats: 11` en permanence dans l'entonnoir.
-    { $match: { decision: 'alerted', dispatch_abandoned_at: { $exists: false } } },
+    // `source: 'stream'` : le flux temps réel envoie ses alertes lui-même, à
+    // la seconde. Les reprendre ici les enverrait une seconde fois.
+    { $match: { decision: 'alerted', dispatch_abandoned_at: { $exists: false }, source: { $ne: 'stream' } } },
     { $sort: { ts: -1 } },
     { $limit: limit },
     { $lookup: { from: 'alerts', localField: '_id', foreignField: 'trigger_id', as: 'sent' } },

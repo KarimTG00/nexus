@@ -52,7 +52,9 @@ export async function listTokens({ status, chain, sort = 'mc', limit = 50, offse
     'holders.count': 1, 'holders.top10Pct': 1,
     velocity: 1, created_at: 1, discovered_at: 1, launchpad: 1,
     triggers: 1, muted: 1, 'security.checked': 1, 'bonding.bonded': 1,
-    'liquidity.aggregate': 1, 'liquidity.divergence': 1
+    'liquidity.aggregate': 1, 'liquidity.divergence': 1,
+    'live.source': 1, 'live.mc': 1, 'live.price_usd': 1, 'live.micro_share': 1,
+    'live.micro_sample': 1, 'live.graduated': 1, 'live.updated_at': 1
   }
 
   const [docs, total] = await Promise.all([
@@ -77,8 +79,16 @@ export async function listTokens({ status, chain, sort = 'mc', limit = 50, offse
       tier: t.tier,
       muted: Boolean(t.muted),
       launchpad: t.launchpad,
-      mc: t.market?.mc ?? null,
-      price: t.market?.price ?? null,
+      // Un token du flux temps réel a sa capitalisation mesurée au trade près ;
+      // `market` n'est pour lui qu'un relevé Mobula, plus ancien.
+      mc: t.live?.mc ?? t.market?.mc ?? null,
+      price: t.live?.price_usd ?? t.market?.price ?? null,
+      live: t.live?.source === 'stream' ? {
+        microShare: t.live.micro_share ?? null,
+        microSample: t.live.micro_sample ?? null,
+        graduated: t.live.graduated ?? null,
+        updatedAt: t.live.updated_at ?? null
+      } : null,
       liquidity: t.liquidity?.aggregate ?? t.market?.liquidity_usd ?? null,
       volume24h: t.market?.volume_24h ?? null,
       holders: t.holders?.count ?? null,

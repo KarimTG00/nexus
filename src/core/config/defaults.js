@@ -30,7 +30,9 @@ export const CONFIG_V1 = {
     watchdog:       { enabled: true },
     social_scoring: { enabled: false },   // activé au seuil 5M seulement
     // `source` : 'rpc' (sondage, multi-fournisseur) ou 'helius' (webhook).
-    swap_collector: { enabled: true, source: 'rpc' }
+    swap_collector: { enabled: true, source: 'rpc' },
+    // Flux temps réel pump.fun (WebSocket). `STREAM=off` le coupe localement.
+    stream:         { enabled: true }
   },
 
   thresholds: {
@@ -70,6 +72,55 @@ export const CONFIG_V1 = {
       poll_interval_min: 5,
       poll_tokens_par_passage: 250,
       poll_max_signatures: 100
+    },
+
+    // Flux temps réel pump.fun : chaque trade de la courbe et de PumpSwap,
+    // décodé depuis les journaux des deux programmes.
+    stream: {
+      // Écoutés EN MÊME TEMPS et dédupliqués par signature : mesurés, ils
+      // livrent les mêmes transactions (676 communes sur 702 en 20 s) et
+      // l'un couvre les trous de l'autre. QUICKNODE_URL s'y ajoute s'il existe.
+      endpoints: ['wss://api.mainnet-beta.solana.com', 'wss://solana-rpc.publicnode.com'],
+
+      // Entrée. La graduation se fait à 410,9 SOL de capitalisation, soit
+      // ~41 K$ avec le SOL à 99 $ : 50 K tombe juste après, sur PumpSwap.
+      entry_mc: 50_000,
+
+      // Activité fabriquée : part des trades sous `micro_trade_usd`. En deçà
+      // de `micro_min_sample` trades mesurés, le filtre s'abstient.
+      micro_trade_usd: 1,
+      micro_share: 0.7,
+      micro_min_sample: 20,
+
+      // Filtres écartés pour ces tokens. Les deux premiers lisent le nombre de
+      // traders, gonflé par construction sur un token manipulé. Le troisième
+      // est le seuil de note, dont 40 % du poids est ce même nombre de traders
+      // (acheteurs − vendeurs) : le garder réintroduirait le critère retiré.
+      excluded_filters: ['flat_velocity', 'wash_trading', 'low_score'],
+
+      // Sorties. Auteurs = créateur + premiers acheteurs, snipers exclus ; un
+      // sniper est un wallet parmi les premiers acheteurs de `sniper_min_tokens`
+      // tokens distincts en 24 h.
+      exit_multiple: 10,
+      exit_authors_min: 2,
+      authors_first_buyers: 10,
+      sniper_min_tokens: 5,
+
+      // Visibilité et étude. Un token n'est écrit en base qu'à `persist_mc`
+      // (~3,6× la capitalisation de lancement) : les ~5 800 créations
+      // quotidiennes gonfleraient la base et la population « surveillés ».
+      // Ses trades individuels ne le sont qu'à `study_mc`, ou s'il appartient
+      // à l'échantillon témoin (`control_permille` ‰ des créations).
+      persist_mc: 10_000,
+      study_mc: 20_000,
+      control_permille: 20,
+      buffer_max_trades: 5000,
+
+      // Mémoire : un token sans trade depuis `idle_minutes` est oublié ; un
+      // token alerté est suivi `follow_hours` pour ses sorties.
+      idle_minutes: 60,
+      follow_hours: 24,
+      flush_seconds: 5
     },
 
     trigger: [150_000, 500_000, 1_000_000, 5_000_000],

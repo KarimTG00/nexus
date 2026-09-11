@@ -163,12 +163,13 @@ export class TelegramNotifier {
     return { messageId: result.message_id }
   }
 
-  async sendText(text, { chatId = this.chatId, markdown = false } = {}) {
+  async sendText(text, { chatId = this.chatId, markdown = false, replyMarkup = null } = {}) {
     if (!this.available) return { skipped: true }
     return this.#call('sendMessage', {
       chat_id: chatId,
       text: markdown ? text : text,
       ...(markdown ? { parse_mode: 'MarkdownV2' } : {}),
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
       link_preview_options: { is_disabled: true }
     })
   }

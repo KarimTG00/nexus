@@ -46,7 +46,12 @@ export async function findCrossings(cfg, { limit = 200 } = {}) {
 
   const candidates = await col('tokens').find({
     status: { $in: ['tracked', 'alerted'] },
-    'market.mc': { $gte: floor }
+    'market.mc': { $gte: floor },
+    // Les tokens du flux temps réel ont leur propre déclencheur, qui voit le
+    // franchissement au trade près. Les évaluer aussi ici enverrait deux
+    // alertes, dont une en retard de plusieurs minutes sur un `market.mc`
+    // que la découverte Mobula réécrit.
+    'live.source': { $ne: 'stream' }
   }).limit(limit).toArray()
 
   if (!candidates.length) return []
@@ -290,3 +295,7 @@ export async function processTriggers(cfg, { limit = 200 } = {}) {
   log.info(stats, 'déclenchements')
   return stats
 }
+
+// Réutilisés par le flux temps réel, pour que ses snapshots aient exactement
+// la forme de ceux-ci : M5 les compare sans distinguer leur origine.
+export { buildCandidates, buildRawSubscores }

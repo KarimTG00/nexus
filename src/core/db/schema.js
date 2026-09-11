@@ -184,6 +184,25 @@ export const collections = [
     indexes: [{ key: { last_beat_at: -1 }, name: 'ix_beat' }]
   },
 
+  {
+    // Trades individuels du flux temps réel, pour l'étude : tous ceux des
+    // tokens qui dépassent `study_mc`, et ceux d'un échantillon témoin tiré
+    // par hachage du mint. Le reste ne vit qu'en mémoire — 1,2 million de
+    // trades par jour sur la seule courbe ne tiendraient pas dans la base.
+    name: 'trades',
+    indexes: [
+      { key: { ts: 1 },            name: 'ix_ttl', expireAfterSeconds: 14 * DAY },
+      { key: { token: 1, ts: 1 },  name: 'ix_token_ts' },
+      { key: { wallet: 1, ts: -1 }, name: 'ix_wallet' }
+    ]
+  },
+
+  {
+    // Pool PumpSwap → mint : les événements de l'AMM ne portent que le pool.
+    name: 'pump_pools',
+    indexes: [{ key: { mint: 1 }, name: 'ix_mint' }]
+  },
+
   // --- collections analytiques : pré-calculées pour le dashboard ------------
   ...['funnel', 'filter_perf', 'wallets', 'deployers',
       'blindspots', 'discovery', 'regime', 'proposals', 'succes'].map(n => ({

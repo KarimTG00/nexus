@@ -30,7 +30,8 @@ export async function loadFilters({ force = false } = {}) {
   if (registry && !force) return registry
 
   const found = []
-  for (const stage of ['admission', 'activity', 'deep', 'score']) {
+  // `stream` : filtres propres au flux temps réel, évalués avant `deep`.
+  for (const stage of ['admission', 'activity', 'stream', 'deep', 'score']) {
     let files = []
     try {
       files = (await readdir(join(HERE, stage))).filter(f => f.endsWith('.js'))
@@ -54,10 +55,13 @@ export async function loadFilters({ force = false } = {}) {
 
 /** Filtres actifs d'un étage, triés du moins cher au plus cher.
  *  L'ordre fin sera piloté par M5 (taux de rejet × coût). */
-export async function filtersFor(stage, { rejectionRates = {} } = {}) {
+export async function filtersFor(stage, { rejectionRates = {}, exclude = [] } = {}) {
   const all = await loadFilters()
   return all
-    .filter(f => f.stage === stage && f.enabled !== false)
+    // `exclude` retire des filtres pour une population donnée sans les
+    // désactiver pour les autres : le flux temps réel écarte ceux qui lisent
+    // le nombre de traders, que les tokens manipulés gonflent par construction.
+    .filter(f => f.stage === stage && f.enabled !== false && !exclude.includes(f.name))
     .sort((a, b) => {
       const costA = a.cost === 'paid' ? 1 : 0
       const costB = b.cost === 'paid' ? 1 : 0
@@ -77,8 +81,8 @@ export async function requirementsFor(stage) {
  * Exécute les filtres d'un étage, court-circuit au premier échec bloquant.
  * @returns {{ passed, results, rejectionReason }}
  */
-export async function runFilters(stage, ctx, cfg, { rejectionRates } = {}) {
-  const list = await filtersFor(stage, { rejectionRates })
+export async function runFilters(stage, ctx, cfg, { rejectionRates, exclude } = {}) {
+  const list = await filtersFor(stage, { rejectionRates, exclude })
   const results = []
   let rejectionReason = null
 
