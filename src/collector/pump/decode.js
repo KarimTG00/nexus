@@ -296,6 +296,12 @@ export function normaliser(evt, { pools = new Map() } = {}) {
     const p = pools.get(d.pool)
     if (!p) return { type: 'pool_inconnu', pool: d.pool, coinCreator: d.coin_creator ?? null }
 
+    // Pool INVERSÉ : le SOL (ou l'USDC) y est le token de base, donc ce pool
+    // cote autre chose que ce qu'on suit. Mesuré : 80 de nos 236 pools
+    // enregistrés sont dans ce cas. Les lire à l'endroit donnait des prix à
+    // 180 000 $ le token, et gonflait le compteur de cotations inconnues.
+    if (p.mint === WSOL || p.mint === USDC) return { type: 'pool_inverse', pool: d.pool }
+
     const achat = evt.nom === 'BuyEvent'
     const baseDec = p.baseDec ?? DECIMALES_PUMP
     const quoteDec = p.quoteDec ?? decimalesQuote(p.quoteMint)

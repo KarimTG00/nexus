@@ -109,6 +109,11 @@ const amm = normaliser(buyEvt, { pools })
 verifier(amm.type === 'trade' && amm.mint === 'MintTestpump' && amm.cote === 'buy' && amm.prix > 0,
   'trade PumpSwap relié à son mint une fois le pool connu')
 verifier(amm.reserveQuote > 0 && amm.reserveBase > 0, 'réserves du pool PumpSwap ramenées après le trade')
+
+// Pool inversé : le SOL est le token de base, donc la paire cote autre chose.
+const inverse = new Map([[buyEvt.data.pool, { mint: 'So11111111111111111111111111111111111111112', quoteMint: 'AutreTokenQuelconque11111111111111111111111' }]])
+verifier(normaliser(buyEvt, { pools: inverse })?.type === 'pool_inverse',
+  'pool inversé (SOL en base) : écarté au lieu d\'être lu à l\'envers')
 verifier(evenementsDesLogs(['Program log: Instruction: Buy', 'Program data: !!!', 'Program data: AAAA']).length === 0,
   'lignes illisibles ignorées sans exception')
 

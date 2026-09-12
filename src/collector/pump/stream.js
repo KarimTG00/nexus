@@ -225,6 +225,11 @@ function traiter(evt, sig, i) {
       return
     }
     case 'pool': return surPool(n)
+    case 'pool_inverse':
+      // Paire qui cote un autre actif que le nôtre : on la compte pour
+      // pouvoir la suivre, on ne la lit pas.
+      stats.poolsInverses = (stats.poolsInverses ?? 0) + 1
+      return
     case 'pool_inconnu':
       // On ne résout que les pools des tokens qu'on suit, reconnus par leur
       // créateur : PumpSwap porte aussi des milliers de pools sans intérêt.
@@ -280,8 +285,15 @@ function surTrade(n, sig, i, now) {
     noterCreateur(n.creator, +1)
   }
 
+  // Deux absences DIFFÉRENTES, qu'un compteur unique confondait : une monnaie
+  // de cotation qu'on ne sait pas lire (le token n'est pas coté en SOL), et un
+  // cours du SOL momentanément indisponible (notre source de prix a échoué).
+  // La première est une limite connue, la seconde est une panne — et on ne
+  // pouvait pas savoir laquelle des deux nous aveuglait.
+  const cotationConnue = n.quote === 'SOL' || n.quote === 'USDC'
+  if (!cotationConnue) stats.sansCotation = (stats.sansCotation ?? 0) + 1
   const cours = n.quote === 'SOL' ? solUsd : n.quote === 'USDC' ? 1 : null
-  if (cours === null) stats.sansCours++
+  if (cotationConnue && cours === null) stats.sansCours++
   const usd = cours !== null && n.montant !== null ? n.montant * cours : null
   const prixUsd = cours !== null && n.prix !== null ? n.prix * cours : null
   // Liquidité : la réserve en monnaie de cotation forme la moitié du pool,

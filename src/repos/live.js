@@ -33,6 +33,22 @@ export async function assurerIndex() {
       try {
         await col(c.name).createIndex(key, options)
       } catch (e) {
+        // MongoDB refuse de recréer un index existant avec d'autres options
+        // (code 85). C'est le cas du TTL de `trades`, créé à 14 jours puis
+        // ramené à 3 : sans ce rattrapage, la rétention réelle serait restée
+        // à 14 jours pendant que la configuration affirmait 3, et rien
+        // d'autre qu'un avertissement au démarrage ne l'aurait signalé.
+        if ((e.code === 85 || e.code === 86) && options.name) {
+          try {
+            await col(c.name).dropIndex(options.name)
+            await col(c.name).createIndex(key, options)
+            log.info({ collection: c.name, index: options.name, options },
+              'index recréé avec ses nouvelles options')
+          } catch (e2) {
+            log.warn({ collection: c.name, index: options.name, err: e2.message }, 'index non recréé')
+          }
+          continue
+        }
         log.warn({ collection: c.name, index: options.name, err: e.message }, 'index non créé')
       }
     }
