@@ -84,7 +84,14 @@ export const CONFIG_V1 = {
 
       // Entrée. La graduation se fait à 410,9 SOL de capitalisation, soit
       // ~41 K$ avec le SOL à 99 $ : 50 K tombe juste après, sur PumpSwap.
-      entry_mc: 50_000,
+      // Mesuré : la graduation se fait à 410,9 SOL de capitalisation, soit
+      // ~41 K au cours actuel — et les 15 tokens observés ont TOUS gradué
+      // dans la seconde de leur premier trade, la courbe étant achetée d'un
+      // bloc (85 SOL, 793 100 000 tokens). Ce seuil n'attrape donc pas la
+      // courbe : il marque la graduation. Tout seuil entre 30 K et 42 K
+      // déclenche au premier ou deuxième trade du token, là où aucun signal
+      // n'existe encore — c'est `micro_min_sample` qui décide vraiment.
+      entry_mc: 40_000,
       // Au-delà de ce multiple du palier, l'entrée est abandonnée plutôt que
       // déclenchée : un token vu pour la première fois à vingt fois le palier
       // a déjà fait son mouvement. Observé en production, des entrées à 93 M
