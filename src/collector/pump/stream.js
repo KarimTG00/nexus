@@ -28,7 +28,7 @@ import { mod } from '../../core/logger.js'
 import { CONFIG_V1 } from '../../core/config/defaults.js'
 import { fournisseur } from '../../adapters/rpc/providers.js'
 import { PUMP, PUMPSWAP, WSOL, evenementsDesLogs, normaliser, decoderPool } from './decode.js'
-import { creerEtat, appliquerTrade, decisions, Snipers } from './state.js'
+import { creerEtat, appliquerTrade, decisions, paliersDus, Snipers } from './state.js'
 import { evaluerEntree, alerterSortie } from './alertes.js'
 import * as live from '../../repos/live.js'
 
@@ -42,12 +42,15 @@ export function reglages(cfg) {
   return {
     endpoints: s.endpoints,
     entreeMc: s.entry_mc,
-    multipleSortie: s.exit_multiple,
+    multiples: [...(s.exit_multiples ?? [])].sort((a, b) => a - b),
     auteursMin: s.exit_authors_min,
     nbAuteurs: s.authors_first_buyers,
     microUsd: s.micro_trade_usd,
     microMinEchantillon: s.micro_min_sample,
+    // `exclus` ne sont même pas évalués ; `mesureSeule` le sont, enregistrés,
+    // mais ne rejettent rien — c'est ce qui laisse à M5 de quoi les balayer.
     exclus: s.excluded_filters,
+    mesureSeule: s.measure_only_filters,
     persistMc: s.persist_mc,
     etudeMc: s.study_mc,
     temoinPourMille: s.control_permille,
@@ -103,6 +106,9 @@ class Connexion {
     this.arrete = false
     this.relanceEnCours = false
     this.dernier = 0
+    // Trou en cours : instant du dernier message reçu, et cause de la perte.
+    this.coupureDebut = null
+    this.coupureRaison = null
     this.stats = { messages: 0, reconnexions: 0, erreurs: 0 }
   }
 
@@ -131,7 +137,24 @@ class Connexion {
       }
       const v = m.params?.result?.value
       if (!v) return
-      this.dernier = Date.now()
+
+      const maintenant = Date.now()
+      // Reprise après un trou : on le consigne AVANT de reprendre le compte.
+      // Sans ce registre, une coupure serait indiscernable d'un marché calme,
+      // et l'étude lirait « personne n'achetait » là où personne n'écoutait.
+      if (this.coupureDebut) {
+        const debut = this.coupureDebut
+        const raison = this.coupureRaison
+        this.coupureDebut = null
+        const couvert = connexions.some(c => c !== this && c.dernier > debut)
+        stats.coupures = (stats.coupures ?? 0) + 1
+        log.warn({ source: this.nom, duree_s: Math.round((maintenant - debut) / 1000), couvert },
+          'flux repris après coupure')
+        live.enregistrerCoupure({ source: this.nom, debut: new Date(debut), fin: new Date(maintenant), raison, couvert })
+          .catch(e => log.warn({ err: e.message }, 'coupure non enregistrée'))
+      }
+
+      this.dernier = maintenant
       this.stats.messages++
       recevoir(v)
     })
@@ -148,6 +171,9 @@ class Connexion {
     if (this.arrete || this.relanceEnCours) return
     this.relanceEnCours = true
     this.stats.reconnexions++
+    // Le trou commence au dernier message reçu, pas à l'instant où l'on s'en
+    // aperçoit : une connexion muette depuis dix minutes a perdu dix minutes.
+    if (this.dernier && !this.coupureDebut) { this.coupureDebut = this.dernier; this.coupureRaison = raison }
     try { this.ws?.close() } catch { /* déjà fermée */ }
     log.warn({ source: this.nom, raison, dans_ms: this.attente }, 'flux pump.fun interrompu — reprise')
     setTimeout(() => { this.relanceEnCours = false; this.ouvrir() }, this.attente)
@@ -257,6 +283,10 @@ function surTrade(n, sig, i, now) {
   if (cours === null) stats.sansCours++
   const usd = cours !== null && n.montant !== null ? n.montant * cours : null
   const prixUsd = cours !== null && n.prix !== null ? n.prix * cours : null
+  // Liquidité : la réserve en monnaie de cotation forme la moitié du pool,
+  // l'autre moitié étant les tokens. Lue sur les réserves, donc exacte —
+  // c'est elle qui remplace la liquidité agrégée que Mobula facturait.
+  const liquiditeUsd = cours !== null && n.reserveQuote != null ? n.reserveQuote * cours * 2 : null
   // L'offre n'est pas toujours d'un milliard : certaines courbes démarrent
   // sur d'autres paramètres. Celle du CreateEvent fait foi quand on l'a vue.
   const offre = n.offre ?? e.supply ?? 1e9
@@ -268,7 +298,7 @@ function surTrade(n, sig, i, now) {
   }
 
   const avant = e.premiers.length
-  appliquerTrade(e, { ts: n.ts, wallet: n.wallet, cote: n.cote, tokens: n.tokens, usd, prixUsd, mcUsd, venue: n.venue },
+  appliquerTrade(e, { ts: n.ts, wallet: n.wallet, cote: n.cote, tokens: n.tokens, usd, prixUsd, mcUsd, liquiditeUsd, venue: n.venue },
     { maxPremiers: Math.max(20, S.nbAuteurs), microUsd: S.microUsd, now })
   if (e.complet && e.premiers.length > avant && e.premiers.length <= S.nbAuteurs) snipers.noter(n.wallet, n.ts)
   e.sale = true
@@ -312,7 +342,12 @@ function agir(d, e, now) {
       .catch(err => log.error({ mint: e.mint, err: err.message, stack: err.stack }, 'évaluation d\'entrée en échec'))
     return
   }
-  if (d === 'x10') e.alertes.x10 = { at: now, mc: e.mc }
+  if (d.startsWith('x')) {
+    // On marque TOUS les paliers franchis, pas seulement celui qu'on annonce :
+    // un token passé de ×1 à ×40 d'un coup ne doit pas produire ensuite une
+    // alerte « ×3 » sur un mouvement déjà dépassé.
+    for (const m of paliersDus(e, S.multiples)) e.alertes.multiples.push({ multiple: m, at: now, mc: e.mc })
+  }
   if (d === 'auteurs') e.alertes.auteurs = { at: now, mc: e.mc, vendeurs: e.ventesAuteurs.size }
   e.sale = true
   stats.sorties++
@@ -482,7 +517,9 @@ function etatDepuisDoc(d) {
   const a = l.alerts ?? {}
   e.alertes = {
     entree: a.entry ? { ...a.entry, at: +a.entry.at } : null,
-    x10: a.x10 ? { ...a.x10, at: +a.x10.at } : null,
+    // Paliers déjà signalés : sans eux, un redémarrage rejouerait ×3 et ×10
+    // sur un token qui vaut déjà ×40.
+    multiples: (a.multiples ?? []).map(m => ({ ...m, at: +m.at })),
     auteurs: a.authors ? { ...a.authors, at: +a.authors.at } : null
   }
   e.entreeEvaluee = Boolean(a.entry)

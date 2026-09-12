@@ -37,14 +37,17 @@ export default {
     const min = ctx.live?.min_sample ?? 0
 
     if (part === null) {
-      return { value: null, passed: true, skipped: true, detail: 'montants en dollars inconnus' }
+      return { value: null, threshold: seuil, passed: true, skipped: true, detail: 'montants en dollars inconnus' }
     }
     const value = +part.toFixed(3)
     if (n < min) {
-      return { value, passed: true, skipped: true, detail: `${n} trades mesurés, ${min} requis` }
+      return { value, threshold: seuil, passed: true, skipped: true, detail: `${n} trades mesurés, ${min} requis` }
     }
     return {
       value,
+      // Le seuil appliqué, y compris quand il vient du code faute de clé en
+      // configuration : c'est lui que M5 devra balayer.
+      threshold: seuil,
       passed: part >= seuil,
       detail: `${Math.round(part * 100)} % des ${n} trades sous le seuil`
     }

@@ -185,13 +185,16 @@ export const collections = [
   },
 
   {
-    // Trades individuels du flux temps réel, pour l'étude : tous ceux des
-    // tokens qui dépassent `study_mc`, et ceux d'un échantillon témoin tiré
-    // par hachage du mint. Le reste ne vit qu'en mémoire — 1,2 million de
-    // trades par jour sur la seule courbe ne tiendraient pas dans la base.
+    // Trades individuels du flux temps réel, pour l'étude.
+    //
+    // Conservation de 3 jours : mesuré, 99 % des tokens pump.fun graduent en
+    // moins de 48 h, le sommet arrive ~45 min après la création et
+    // l'effondrement ~66 min plus tard. Toute la vie utile d'un token tient
+    // donc dans 72 h, et ce qui doit survivre au-delà (décisions, outcomes,
+    // agrégats du token) vit dans d'autres collections, sans expiration.
     name: 'trades',
     indexes: [
-      { key: { ts: 1 },            name: 'ix_ttl', expireAfterSeconds: 14 * DAY },
+      { key: { ts: 1 },            name: 'ix_ttl', expireAfterSeconds: 3 * DAY },
       { key: { token: 1, ts: 1 },  name: 'ix_token_ts' },
       { key: { wallet: 1, ts: -1 }, name: 'ix_wallet' }
     ]
@@ -203,9 +206,20 @@ export const collections = [
     indexes: [{ key: { mint: 1 }, name: 'ix_mint' }]
   },
 
+  {
+    // Coupures du flux temps réel.
+    //
+    // Sans ce registre, un trou de collecte est INDISCERNABLE d'un token sans
+    // activité : l'étude conclurait « personne n'achetait » là où personne
+    // n'écoutait. Conservé sans expiration — c'est une note sur la qualité de
+    // nos propres mesures, pas une donnée de marché.
+    name: 'stream_gaps',
+    indexes: [{ key: { debut: -1 }, name: 'ix_debut' }]
+  },
+
   // --- collections analytiques : pré-calculées pour le dashboard ------------
   ...['funnel', 'filter_perf', 'wallets', 'deployers',
-      'blindspots', 'discovery', 'regime', 'proposals', 'succes'].map(n => ({
+      'blindspots', 'discovery', 'regime', 'proposals', 'succes', 'strategie'].map(n => ({
     name: `analytics_${n}`,
     indexes: [{ key: { period: -1 }, name: 'ix_period', unique: true }]
   }))

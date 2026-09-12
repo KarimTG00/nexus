@@ -92,16 +92,39 @@ export const CONFIG_V1 = {
       micro_share: 0.7,
       micro_min_sample: 20,
 
-      // Filtres écartés pour ces tokens. Les deux premiers lisent le nombre de
-      // traders, gonflé par construction sur un token manipulé. Le troisième
-      // est le seuil de note, dont 40 % du poids est ce même nombre de traders
-      // (acheteurs − vendeurs) : le garder réintroduirait le critère retiré.
-      excluded_filters: ['flat_velocity', 'wash_trading', 'low_score'],
+      // Arrivée de VRAIS acheteurs : wallets distincts achetant au-dessus de
+      // `micro_trade_usd` sur 5 min. C'est ce qui sépare une manipulation qui
+      // prend d'une manipulation qui meurt. À 0, on mesure sans bloquer.
+      min_real_buyers_5m: 0,
+
+      // Ce qui BLOQUE une entrée, et ce qui est seulement MESURÉ.
+      //
+      // Mesuré sur 533 franchissements : une fois retirés les filtres qui
+      // comptent les traders (69 % et 76 % de rejets), il ne restait presque
+      // plus de filtrage — 0 %, 0 %, 5 %, 15 %. Et `top_holders` est inversé :
+      // avec une concentration médiane de 9,8 %, une ferme de vingt wallets
+      // passe mieux qu'un lancement honnête.
+      //
+      // Pendant l'étude, on bloque donc le moins possible et on mesure tout :
+      // un seuil posé maintenant nous priverait des exemples de l'autre côté
+      // du seuil, donc de la possibilité d'apprendre. Un filtre en mesure
+      // seule garde sa valeur dans le snapshot et reste balayable par M5 ;
+      // un filtre exclu ne laisse aucune trace.
+      measure_only_filters: ['flat_velocity', 'wash_trading', 'low_score',
+        'sell_pressure', 'top_holders', 'lp_not_secured', 'mc_too_high'],
+      excluded_filters: [],
 
       // Sorties. Auteurs = créateur + premiers acheteurs, snipers exclus ; un
       // sniper est un wallet parmi les premiers acheteurs de `sniper_min_tokens`
       // tokens distincts en 24 h.
-      exit_multiple: 10,
+      // Sorties ÉCHELONNÉES, chacune signalée une seule fois.
+      //
+      // Le gain vient d'une distribution à queue épaisse : le plus gros
+      // multiple paie tous les échecs. Une sortie unique à ×10 couperait
+      // précisément le ×150 qui rend la stratégie rentable — et le multiple
+      // accessible se lit sur le prix d'entrée : à 40 K un plafond de 5 M
+      // vaut ×125, à 2,5 M il vaut ×2.
+      exit_multiples: [3, 10, 30],
       exit_authors_min: 2,
       authors_first_buyers: 10,
       sniper_min_tokens: 5,
@@ -109,11 +132,13 @@ export const CONFIG_V1 = {
       // Visibilité et étude. Un token n'est écrit en base qu'à `persist_mc`
       // (~3,6× la capitalisation de lancement) : les ~5 800 créations
       // quotidiennes gonfleraient la base et la population « surveillés ».
-      // Ses trades individuels ne le sont qu'à `study_mc`, ou s'il appartient
-      // à l'échantillon témoin (`control_permille` ‰ des créations).
+      //
+      // Les TRADES, eux, sont tous conservés : à 3 jours de rétention ils
+      // pèsent ~1 Go, et le groupe témoin devient la totalité des tokens
+      // morts au lieu d'un échantillon. C'est ce qui rend l'étude comparable.
       persist_mc: 10_000,
       study_mc: 20_000,
-      control_permille: 20,
+      control_permille: 1000,
       buffer_max_trades: 5000,
 
       // Mémoire : un token sans trade depuis `idle_minutes` est oublié ; un

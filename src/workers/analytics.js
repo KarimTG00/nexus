@@ -16,6 +16,7 @@ import { active } from '../core/config/store.js'
 import * as m7 from '../analytics/m7-blindspots.js'
 import * as m5 from '../analytics/m5-calibration.js'
 import * as m9 from '../analytics/m9-succes.js'
+import * as m10 from '../analytics/m10-strategie.js'
 import * as positionsRepo from '../repos/positions.js'
 
 const log = mod('analytics')
@@ -26,6 +27,9 @@ const MODULES = {
   m5: (cfg) => m5.run(cfg),
   // M9 ne coûte aucun appel externe : il ne lit que ce qu'on a déjà écrit.
   m9: (cfg) => m9.run(cfg),
+  // M10 met à l'épreuve la stratégie elle-même : pouvoir séparateur des
+  // signaux, avance donnée par l'alerte de sortie, espérance par politique.
+  m10: (cfg) => m10.run(cfg),
   // Entretien : clôture des positions soldées, purge des anciennes.
   maintenance: async () => ({
     closes: await positionsRepo.closeSettled(),

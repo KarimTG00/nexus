@@ -1,5 +1,5 @@
 /**
- * P10 — flux temps réel pump.fun : décodage, état, décisions.
+ * P10 — flux temps réel pump.fun : décodage, état, décisions, filtrage.
  *
  * Aucun réseau. Le décodage est vérifié sur de VRAIS journaux capturés sur le
  * mainnet (fixtures/pump-logs.json) ; l'état et les décisions sur des
@@ -10,10 +10,11 @@
 
 import { readFileSync } from 'node:fs'
 import { decoderEvenement, normaliser, evenementsDesLogs } from '../collector/pump/decode.js'
-import { creerEtat, appliquerTrade, partMicro, fenetres, auteurs, figerAuteurs, decisions, Snipers }
-  from '../collector/pump/state.js'
+import { creerEtat, appliquerTrade, partMicro, partDetenue, fenetres, auteurs, figerAuteurs,
+  decisions, paliersDus, multipleAtteint, Snipers } from '../collector/pump/state.js'
 import microTrades from '../pipeline/filters/stream/micro_trades.js'
-import { filtersFor } from '../pipeline/filters/index.js'
+import realBuyers from '../pipeline/filters/stream/real_buyers.js'
+import { filtersFor, runFilters } from '../pipeline/filters/index.js'
 import { reglages } from '../collector/pump/stream.js'
 
 let ok = 0
@@ -91,6 +92,11 @@ verifier(autres.every(t => t.prix === null && t.montant === null && t.tokens > 0
   `${autres.length} trades cotés dans une autre monnaie : prix et montant laissés inconnus`)
 verifier(enSol.length + autres.length === trades.length, 'chaque trade de courbe est classé')
 
+// Les réserves RÉELLES remplacent la liquidité que Mobula facturait.
+const avecReserve = enSol.filter(t => t.reserveQuote !== null && t.reserveQuote !== undefined)
+verifier(avecReserve.length >= enSol.length * 0.9 && avecReserve.every(t => t.reserveQuote >= 0),
+  `${avecReserve.length}/${enSol.length} trades de courbe portent la réserve réelle du pool`)
+
 const an = new Date(trades[0]?.ts).getUTCFullYear()
 verifier(an >= 2025 && an <= 2030, `horodatage plausible (${an})`)
 verifier(trades.filter(t => t.mint.endsWith('pump')).length / trades.length >= 0.8, 'mints au suffixe pump.fun')
@@ -102,16 +108,19 @@ const pools = new Map([[buyEvt.data.pool, { mint: 'MintTestpump', quoteMint: 'So
 const amm = normaliser(buyEvt, { pools })
 verifier(amm.type === 'trade' && amm.mint === 'MintTestpump' && amm.cote === 'buy' && amm.prix > 0,
   'trade PumpSwap relié à son mint une fois le pool connu')
+verifier(amm.reserveQuote > 0 && amm.reserveBase > 0, 'réserves du pool PumpSwap ramenées après le trade')
 verifier(evenementsDesLogs(['Program log: Instruction: Buy', 'Program data: !!!', 'Program data: AAAA']).length === 0,
   'lignes illisibles ignorées sans exception')
 
 // --- 2. état et décisions ------------------------------------------------------------
 
 console.log('\n2. État et décisions')
-const S = { entreeMc: 50_000, multipleSortie: 10, auteursMin: 2 }
+const S = { entreeMc: 50_000, multiples: [3, 10, 30], auteursMin: 2 }
 const t0 = Date.parse('2026-09-11T12:00:00Z')
 const opts = (min = 0) => ({ maxPremiers: 20, microUsd: 1, now: t0 + min * 60_000 })
 const trade = (wallet, cote, usd, mc, min = 0) => ({ ts: t0 + min * 60_000, wallet, cote, tokens: 1000, usd, prixUsd: mc / 1e9, mcUsd: mc, venue: 'courbe' })
+// Marque les paliers franchis, comme le fait le flux après avoir alerté.
+const marquer = (e) => { for (const m of paliersDus(e, S.multiples)) e.alertes.multiples.push({ multiple: m, at: t0, mc: e.mc }) }
 
 const e = creerEtat({ mint: 'M', creator: 'DEV', createdAt: t0, vuA: t0 })
 appliquerTrade(e, trade('DEV', 'buy', 50, 3_000), opts())
@@ -121,6 +130,7 @@ for (let k = 1; k <= 3; k++) appliquerTrade(e, trade(`R${k}`, 'buy', 40, 6_000 +
 verifier(e.premiers.length === 16 && e.premiers[0].wallet === 'DEV' && e.premiers[1].wallet === 'W1',
   'premiers acheteurs distincts, dans l\'ordre')
 verifier(Math.abs(partMicro(e) - 12 / 16) < 1e-9, `part de micro-trades exacte (${partMicro(e)})`)
+verifier(e.acheteursReels === 4, `acheteurs réels comptés (${e.acheteursReels} : DEV et R1 à R3)`)
 verifier(decisions(e, S).length === 0, 'sous 50 K : aucune décision')
 
 appliquerTrade(e, trade('R4', 'buy', 800, 52_000, 3), opts(3))
@@ -139,8 +149,15 @@ verifier(!new Snipers({ seuil: 3 }).est('W2', t0), 'un wallet vu une fois n\'est
 
 figerAuteurs(e, liste)
 e.alertes.entree = { decision: 'alerted', mc: 52_000, at: t0 + 3 * 60_000 }
+
+appliquerTrade(e, trade('Z', 'buy', 20, 120_000, 5), opts(5))
+verifier(decisions(e, S).length === 0, `×${multipleAtteint(e).toFixed(1)} : aucun palier`)
+
 appliquerTrade(e, trade('X', 'buy', 100, 400_000, 10), opts(10))
-verifier(decisions(e, S).length === 0, '×7,7 : pas encore de sortie')
+verifier(JSON.stringify(decisions(e, S)) === '["x3"]', `×${multipleAtteint(e).toFixed(1)} : palier ×3`)
+marquer(e)
+verifier(decisions(e, S).length === 0, 'un palier franchi ne se signale qu\'une fois')
+
 appliquerTrade(e, trade('W1', 'sell', 5, 380_000, 11), opts(11))
 verifier(decisions(e, S).length === 0, 'un seul auteur vend : pas encore d\'alerte')
 appliquerTrade(e, trade('R9', 'sell', 5, 370_000, 11), opts(11))
@@ -148,10 +165,29 @@ verifier(e.ventesAuteurs.size === 1, 'la vente d\'un non-auteur n\'est pas compt
 appliquerTrade(e, trade('W3', 'sell', 5, 360_000, 12), opts(12))
 verifier(JSON.stringify(decisions(e, S)) === '["auteurs"]', 'deux auteurs vendent : alerte de sortie')
 e.alertes.auteurs = { at: t0 }
+
 appliquerTrade(e, trade('Y', 'buy', 100, 530_000, 13), opts(13))
-verifier(JSON.stringify(decisions(e, S)) === '["x10"]', '×10 depuis l\'entrée : alerte de sortie')
-e.alertes.x10 = { at: t0 }
-verifier(decisions(e, S).length === 0, 'chaque sortie n\'est signalée qu\'une fois')
+verifier(JSON.stringify(decisions(e, S)) === '["x10"]', `×${multipleAtteint(e).toFixed(1)} : palier ×10`)
+marquer(e)
+verifier(decisions(e, S).length === 0, 'chaque palier n\'est signalé qu\'une fois')
+
+// À t0+13 min, les 5 dernières minutes contiennent X, W1, R9, W3 et Y.
+const w = fenetres(e, t0 + 13 * 60_000)
+verifier(w['5min'].trades === 5 && w['5min'].sells === 3 && w['5min'].buyers === 2 && w['1h'].trades === e.n,
+  `fenêtres glissantes (5 min : ${w['5min'].trades} trades dont ${w['5min'].sells} ventes, 1 h : ${w['1h'].trades})`)
+
+appliquerTrade(e, trade('K', 'buy', 500, 2_000_000, 14), opts(14))
+verifier(JSON.stringify(decisions(e, S)) === '["x30"]', `×${multipleAtteint(e).toFixed(0)} : palier ×30`)
+
+// Un token qui saute directement très haut ne produit qu'UNE alerte, la plus haute.
+const saut = creerEtat({ mint: 'S', creator: 'D4', vuA: t0 })
+saut.entreeEvaluee = true
+saut.alertes.entree = { decision: 'alerted', mc: 50_000, at: t0 }
+appliquerTrade(saut, trade('A', 'buy', 900, 2_000_000), opts())
+verifier(JSON.stringify(decisions(saut, S)) === '["x30"]', 'saut de ×1 à ×40 : une seule alerte, la plus haute')
+for (const m of paliersDus(saut, S.multiples)) saut.alertes.multiples.push({ multiple: m, at: t0, mc: saut.mc })
+verifier(saut.alertes.multiples.length === 3 && decisions(saut, S).length === 0,
+  'les paliers intermédiaires sont marqués, jamais annoncés en retard')
 
 const rejete = creerEtat({ mint: 'R', creator: 'D2', vuA: t0 })
 rejete.entreeEvaluee = true
@@ -167,11 +203,6 @@ appliquerTrade(partiel, trade('A', 'sell', 5, 60_000), opts())
 appliquerTrade(partiel, trade('B', 'sell', 5, 60_000), opts())
 verifier(!decisions(partiel, S).includes('auteurs'), 'token sans premiers acheteurs connus : pas d\'alerte d\'auteurs')
 
-// À t0+13 min, les 5 dernières minutes contiennent X, W1, R9, W3 et Y.
-const w = fenetres(e, t0 + 13 * 60_000)
-verifier(w['5min'].trades === 5 && w['5min'].sells === 3 && w['5min'].buyers === 2 && w['1h'].trades === e.n,
-  `fenêtres glissantes (5 min : ${w['5min'].trades} trades dont ${w['5min'].sells} ventes, 1 h : ${w['1h'].trades})`)
-
 const vieux = creerEtat({ mint: 'V', vuA: t0 })
 appliquerTrade(vieux, trade('A', 'buy', 1, 1000, 0), opts(0))
 appliquerTrade(vieux, trade('B', 'buy', 1, 1000, 90), opts(90))
@@ -182,31 +213,101 @@ appliquerTrade(sansCours, { ts: t0, wallet: 'A', cote: 'buy', tokens: 10, usd: n
 verifier(partMicro(sansCours) === null && sansCours.mc === null && decisions(sansCours, S).length === 0,
   'trade sans cours : ni part de micro-trades, ni capitalisation, ni décision')
 
-// --- 3. filtre micro_trades ------------------------------------------------------------
+// --- 3. acheteurs réels, liquidité, part des auteurs ------------------------------------
 
-console.log('\n3. Filtre micro_trades')
+console.log('\n3. Acheteurs réels, liquidité, part des auteurs')
+const rb = creerEtat({ mint: 'B2', vuA: t0 })
+appliquerTrade(rb, { ts: t0, wallet: 'M1', cote: 'buy', tokens: 10, usd: 0.4, prixUsd: 1e-9, mcUsd: 1000, liquiditeUsd: 25_000 }, opts())
+appliquerTrade(rb, { ts: t0, wallet: 'R1', cote: 'buy', tokens: 10, usd: 5, prixUsd: 1e-9, mcUsd: 1000 }, opts())
+appliquerTrade(rb, { ts: t0, wallet: 'R1', cote: 'buy', tokens: 10, usd: 7, prixUsd: 1e-9, mcUsd: 1000 }, opts())
+verifier(rb.acheteursReels === 1, 'un wallet qui répète ses achats ne compte que pour un acheteur réel')
+verifier(fenetres(rb, t0, { microUsd: 1 })['5min'].buyersReels === 1 && fenetres(rb, t0)['5min'].buyers === 2,
+  'la fenêtre distingue les acheteurs réels des acheteurs de micro-trades')
+verifier(rb.liquiditeUsd === 25_000, 'liquidité retenue depuis les réserves')
+appliquerTrade(rb, { ts: t0, wallet: 'R2', cote: 'buy', tokens: 10, usd: 3, prixUsd: 1e-9, mcUsd: 1000, liquiditeUsd: null }, opts())
+verifier(rb.liquiditeUsd === 25_000, 'un trade sans réserve connue n\'efface pas la dernière liquidité mesurée')
+
+const av = creerEtat({ mint: 'A2', creator: 'DEV', vuA: t0 })
+av.supply = 1_000_000
+appliquerTrade(av, { ts: t0, wallet: 'DEV', cote: 'buy', tokens: 200_000, usd: 500, prixUsd: 1e-9, mcUsd: 60_000 }, opts())
+appliquerTrade(av, { ts: t0, wallet: 'B', cote: 'buy', tokens: 100_000, usd: 300, prixUsd: 1e-9, mcUsd: 60_000 }, opts())
+figerAuteurs(av, ['DEV', 'B'])
+verifier(av.partAuteurs === 0.3, `part détenue par les auteurs à l'entrée (${av.partAuteurs})`)
+appliquerTrade(av, { ts: t0, wallet: 'DEV', cote: 'sell', tokens: 150_000, usd: 400, prixUsd: 1e-9, mcUsd: 55_000 }, opts())
+verifier(av.partAuteurs === 0.15 && av.ventesAuteurs.size === 1,
+  `la part suit les ventes des auteurs (${av.partAuteurs})`)
+verifier(partDetenue(partiel, ['D3']) === null,
+  'token repris en cours de route : part des auteurs inconnue plutôt que fausse')
+
+// --- 4. filtres de l'étage stream --------------------------------------------------------
+
+console.log('\n4. Filtres de l\'étage stream')
 const f = (part, n, min = 20, seuil = 0.7) => microTrades.evaluate({ live: { micro_share: part, micro_sample: n, min_sample: min } }, seuil)
 verifier(f(0.8, 100).passed && !f(0.8, 100).skipped, '80 % de micro-trades : passe')
 verifier(f(0.5, 100).passed === false, '50 % : rejeté')
 verifier(f(0.9, 5).skipped && f(0.9, 5).passed, 'échantillon trop petit : abstention, sans rejet')
 verifier(f(null, 0).skipped, 'montants inconnus : abstention')
-verifier(microTrades.evaluate({ live: { micro_share: 0.75, micro_sample: 50, min_sample: 20 } }, undefined).passed,
-  'seuil absent de la configuration : valeur par défaut (0,7)')
+const defaut = microTrades.evaluate({ live: { micro_share: 0.75, micro_sample: 50, min_sample: 20 } }, undefined)
+verifier(defaut.passed && defaut.threshold === 0.7,
+  `seuil absent de la configuration : valeur par défaut appliquée ET enregistrée (${defaut.threshold})`)
 
-// --- 4. exclusion de filtres et réglages ------------------------------------------------
+const rbf = (n, seuil) => realBuyers.evaluate({ live: { real_buyers_5m: n, micro_usd: 1 } }, seuil)
+verifier(rbf(5, 3).passed && rbf(5, 3).value === 5, '5 acheteurs réels pour un seuil de 3 : passe')
+verifier(rbf(1, 3).passed === false, '1 acheteur réel pour un seuil de 3 : rejeté')
+verifier(rbf(0, 0).passed, 'seuil à 0 : mesure sans bloquer')
+verifier(rbf(null, 3).skipped, 'acheteurs réels inconnus : abstention')
 
-console.log('\n4. Exclusion de filtres et réglages')
-const tous = (await filtersFor('deep')).map(x => x.name)
+// --- 5. mesure seule et exclusion ---------------------------------------------------------
+
+console.log('\n5. Mesure seule et exclusion')
+const cfgT = {
+  thresholds: {
+    filters: { sell_pressure: 1.2, wash_index: 8, top_holders: 30, lp_secured: 95 },
+    alert: { min_score: 70, max_mc: 2_000_000 },
+    stream: { micro_share: 0.7, min_real_buyers_5m: 3 }
+  }
+}
+const ctxT = {
+  _id: 'solana:test',
+  mc: 60_000, threshold_franchi: 50_000,
+  velocity: { buySellRatio: 0.5, washIndex: 20, acceleration: { direction: 'down', ratio: 0.4, confident: true } },
+  holders: { top10Pct: 55 },
+  bonding: { bonded: true },
+  liquidity: { liquidityUsd: 30_000, liquidityBurnPct: null },
+  live: { micro_share: 0.9, micro_sample: 50, min_sample: 20, real_buyers_5m: 1, micro_usd: 1 }
+}
+
+const dur = await runFilters('deep', ctxT, cfgT)
+verifier(dur.passed === false && ['flat_velocity', 'wash_trading', 'sell_pressure', 'top_holders'].includes(dur.rejectionReason),
+  `sans mesure seule, le premier filtre bloquant rejette (${dur.rejectionReason})`)
+
+const tousDeep = (await filtersFor('deep')).map(x => x.name)
+const doux = await runFilters('deep', ctxT, cfgT, { mesureSeule: tousDeep })
+verifier(doux.passed === true && doux.rejectionReason === null,
+  'en mesure seule, aucun filtre profond ne rejette')
+verifier(doux.results.length === tousDeep.length && doux.results.every(r => r.enforced === false),
+  `les ${doux.results.length} filtres profonds sont quand même évalués et marqués non appliqués`)
+const sp = doux.results.find(r => r.name === 'sell_pressure')
+verifier(sp?.value === 0.5 && sp?.passed === false,
+  'la valeur mesurée et son échec restent enregistrés, pour que M5 puisse balayer le seuil')
+
+const stream = await runFilters('stream', ctxT, cfgT, { mesureSeule: ['real_buyers'] })
+verifier(stream.passed === true && stream.results.find(r => r.name === 'real_buyers')?.passed === false,
+  'un filtre en mesure seule échoue sans bloquer l\'entrée')
+verifier(stream.results.find(r => r.name === 'micro_trades')?.passed === true,
+  'le filtre de fabrication, lui, reste appliqué')
+
 const sans = (await filtersFor('deep', { exclude: ['wash_trading', 'flat_velocity'] })).map(x => x.name)
-verifier(tous.includes('wash_trading') && !sans.includes('wash_trading') && !sans.includes('flat_velocity'),
-  'exclusion ciblée des filtres qui lisent les traders')
-verifier(sans.length === tous.length - 2, 'les autres filtres profonds restent actifs')
-verifier((await filtersFor('stream')).some(x => x.name === 'micro_trades'), 'étage stream chargé')
+verifier(!sans.includes('wash_trading') && sans.length === tousDeep.length - 2,
+  'un filtre exclu n\'est pas évalué du tout, contrairement à la mesure seule')
 
-const r = reglages({ thresholds: { stream: { entry_mc: 60_000 } } })
-verifier(r.entreeMc === 60_000 && r.multipleSortie === 10 && r.microUsd === 1,
-  'réglages : la configuration prime, les défauts complètent')
-verifier(reglages({}).endpoints.length >= 2, 'deux points d\'accès par défaut')
+const r = reglages({ thresholds: { stream: { entry_mc: 60_000, exit_multiples: [30, 3, 10] } } })
+verifier(r.entreeMc === 60_000 && JSON.stringify(r.multiples) === '[3,10,30]' && r.microUsd === 1,
+  'réglages : la configuration prime, les défauts complètent, les paliers sont triés')
+verifier(reglages({}).mesureSeule.includes('top_holders') && reglages({}).exclus.length === 0,
+  'par défaut : tout est mesuré, rien n\'est exclu')
+verifier(reglages({}).endpoints.length >= 2 && reglages({}).multiples.length >= 2,
+  'deux points d\'accès et des paliers échelonnés par défaut')
 
 console.log(`\n${ok} vérifications passées, ${ko} en échec`)
 process.exit(ko ? 1 : 0)

@@ -28,7 +28,7 @@ export const idToken = mint => `solana:${mint}`
  * s'effacerait jamais.
  */
 export async function assurerIndex() {
-  for (const c of collections.filter(x => ['trades', 'pump_pools'].includes(x.name))) {
+  for (const c of collections.filter(x => ['trades', 'pump_pools', 'stream_gaps'].includes(x.name))) {
     for (const { key, ...options } of c.indexes ?? []) {
       try {
         await col(c.name).createIndex(key, options)
@@ -54,6 +54,15 @@ export function docLive(e) {
     trades: e.n,
     buys: e.achats,
     sells: e.ventes,
+    // Liquidité réelle du pool, lue sur les réserves — jamais un agrégat.
+    liquidity_usd: e.liquiditeUsd === null ? null : Math.round(e.liquiditeUsd),
+    // Acheteurs au-dessus du seuil de micro-trade : les vrais, par opposition
+    // à ceux que le déployeur fabrique.
+    real_buyers: e.acheteursReels,
+    // Part de l'offre encore détenue par les auteurs : la mesure du risque de
+    // sortie, et la seule qu'aucun fournisseur ne vend, puisqu'elle suppose
+    // d'avoir suivi le token depuis sa première seconde.
+    authors_share: e.partAuteurs,
     micro_share: part === null ? null : +part.toFixed(4),
     micro_sample: e.usdConnus,
     volume_usd: Math.round(e.volumeUsd),
@@ -67,7 +76,8 @@ export function docLive(e) {
     author_sells: [...e.ventesAuteurs].map(([wallet, v]) => ({ wallet, ts: new Date(v.ts), tokens: v.tokens })),
     alerts: {
       entry: e.alertes.entree ? { ...e.alertes.entree, at: new Date(e.alertes.entree.at) } : null,
-      x10: e.alertes.x10 ? { ...e.alertes.x10, at: new Date(e.alertes.x10.at) } : null,
+      // Multiples de sortie déjà signalés : { multiple, at, mc }
+      multiples: (e.alertes.multiples ?? []).map(m => ({ ...m, at: new Date(m.at) })),
       authors: e.alertes.auteurs ? { ...e.alertes.auteurs, at: new Date(e.alertes.auteurs.at) } : null
     },
     study: Boolean(e.etude),
@@ -200,6 +210,31 @@ export async function chargerSuivis(depuis) {
     { projection: { address: 1, symbol: 1, name: 1, deployer: 1, created_at: 1, discovered_at: 1,
                     supply: 1, triggers: 1, live: 1 } }
   ).toArray()
+}
+
+/**
+ * Enregistre une coupure du flux.
+ *
+ * `debut` est l'instant du dernier message reçu, `fin` celui de la reprise :
+ * entre les deux, on ne sait pas ce qui s'est passé sur la chaîne. L'étude
+ * doit écarter ces fenêtres plutôt que d'y lire une absence d'activité.
+ */
+export async function enregistrerCoupure({ source, debut, fin, raison, couvert = false }) {
+  await col('stream_gaps').insertOne({
+    source, debut, fin,
+    duree_s: Math.round((+fin - +debut) / 1000),
+    raison,
+    // `couvert` : une autre connexion recevait pendant ce trou. La coupure est
+    // alors sans conséquence sur les données, et l'étude doit l'ignorer —
+    // sinon on déclarerait aveugle une période où l'on voyait très bien.
+    couvert,
+    created_at: new Date()
+  })
+}
+
+/** Coupures depuis une date, dans l'ordre. */
+export async function coupures(depuis) {
+  return col('stream_gaps').find({ debut: { $gte: depuis } }).sort({ debut: 1 }).toArray()
 }
 
 /** Tokens du flux retombés dans l'inactivité sans jamais avoir été évalués. */

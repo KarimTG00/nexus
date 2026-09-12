@@ -223,9 +223,14 @@ export function normaliser(evt, { pools = new Map() } = {}) {
       // Réserves virtuelles APRÈS le trade : le prix au comptant qui en découle
       // est celui que verra le trade suivant.
       prix: vQuote !== null && vTok > 0 ? vQuote / vTok : null,
+      // Réserves RÉELLES, à ne pas confondre avec les virtuelles ci-dessus :
+      // les virtuelles font le prix, les réelles font la liquidité — ce qu'on
+      // pourrait effectivement sortir du pool. Elles remplacent la liquidité
+      // que Mobula facturait au franchissement.
+      reserveQuote: quote === WSOL ? d.real_sol_reserves / 1e9 : null,
+      reserveBase: d.real_token_reserves != null ? d.real_token_reserves / 10 ** DECIMALES_PUMP : null,
       ts: d.timestamp * 1000,
       creator: d.creator ?? null,
-      reelQuote: quote === WSOL ? d.real_sol_reserves / 1e9 : null,
       ix: d.ix_name ?? null
     }
   }
@@ -268,6 +273,10 @@ export function normaliser(evt, { pools = new Map() } = {}) {
       mint: p.mint, wallet: d.user, cote: achat ? 'buy' : 'sell',
       tokens, montant, quote: symboleQuote(p.quoteMint),
       prix: prixAmm(d, achat, baseDec, quoteDec, tokens, montant),
+      // Réserves du pool APRÈS le trade : celles de l'événement sont d'avant
+      // (vérifié sur journaux réels), on lui applique donc l'échange.
+      reserveQuote: d.pool_quote_token_reserves / 10 ** quoteDec + (achat ? montant : -montant),
+      reserveBase: d.pool_base_token_reserves / 10 ** baseDec + (achat ? -tokens : tokens),
       ts: d.timestamp * 1000,
       creator: d.coin_creator ?? null,
       offre: d.base_supply != null ? d.base_supply / 10 ** baseDec : null

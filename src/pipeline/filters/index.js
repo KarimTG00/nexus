@@ -81,7 +81,7 @@ export async function requirementsFor(stage) {
  * Exécute les filtres d'un étage, court-circuit au premier échec bloquant.
  * @returns {{ passed, results, rejectionReason }}
  */
-export async function runFilters(stage, ctx, cfg, { rejectionRates, exclude } = {}) {
+export async function runFilters(stage, ctx, cfg, { rejectionRates, exclude, mesureSeule = [] } = {}) {
   const list = await filtersFor(stage, { rejectionRates, exclude })
   const results = []
   let rejectionReason = null
@@ -99,16 +99,28 @@ export async function runFilters(stage, ctx, cfg, { rejectionRates, exclude } = 
       r = { value: null, passed: true, skipped: true, detail: `erreur: ${e.message}` }
     }
 
+    // `mesureSeule` : le filtre est évalué et sa valeur enregistrée, mais il
+    // ne rejette rien. C'est ce qui permet à M5 de balayer son seuil plus
+    // tard — un filtre simplement retiré ne laisserait aucune trace, et on
+    // ne saurait jamais s'il avait du signal. `enforced: false` marque la
+    // ligne pour qu'on ne la confonde pas avec une vraie décision.
+    const applique = !mesureSeule.includes(f.name)
+
     results.push({
       name: f.name,
       value: r.value ?? null,
-      threshold: threshold ?? null,
+      // Le seuil RÉELLEMENT appliqué. Un filtre qui retombe sur sa valeur par
+      // défaut, faute de clé en configuration, le dit dans son résultat :
+      // enregistrer `null` ferait croire à M5 qu'aucun seuil n'a décidé, alors
+      // qu'un seuil a bien décidé — celui du code.
+      threshold: r.threshold ?? threshold ?? null,
       passed: r.passed !== false,
+      ...(applique ? {} : { enforced: false }),
       ...(r.skipped ? { skipped: true } : {}),
       ...(r.detail ? { detail: r.detail } : {})
     })
 
-    if (r.passed === false && f.blocking) { rejectionReason = f.name; break }
+    if (r.passed === false && f.blocking && applique) { rejectionReason = f.name; break }
   }
 
   return { passed: rejectionReason === null, results, rejectionReason }
