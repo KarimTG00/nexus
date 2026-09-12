@@ -42,6 +42,7 @@ export function reglages(cfg) {
   return {
     endpoints: s.endpoints,
     entreeMc: s.entry_mc,
+    entreeMaxRatio: s.entry_max_ratio,
     multiples: [...(s.exit_multiples ?? [])].sort((a, b) => a - b),
     auteursMin: s.exit_authors_min,
     nbAuteurs: s.authors_first_buyers,

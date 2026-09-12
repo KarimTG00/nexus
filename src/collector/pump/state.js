@@ -215,9 +215,38 @@ export function paliersDus(e, multiples = []) {
  * @param s { entreeMc, multiples, auteursMin }
  * @returns liste d'actions : 'entree' | 'x<multiple>' | 'auteurs'
  */
+/**
+ * Le token est-il seulement ÉVALUABLE à l'entrée ?
+ *
+ * Ces conditions ne jugent pas le token : elles vérifient qu'on a de quoi le
+ * juger. Sans elles, l'entrée partait sur des tokens qu'on ne savait pas lire
+ * — observé en production, des alertes « 0 % sur 1 trade, 0 auteurs ».
+ */
+export function peutEvaluerEntree(e, s) {
+  if (e.entreeEvaluee) return false
+  if (e.mc === null || e.mc < s.entreeMc) return false
+
+  // Sans CreateEvent, ses premiers acheteurs sont inconnus, donc ses auteurs
+  // aussi : l'alerte de sortie sur vente d'auteur serait impossible, et
+  // l'entrée n'aurait aucune sortie à proposer.
+  if (!e.complet) return false
+
+  // Trop peu de trades mesurés : `micro_trades` s'abstiendrait faute
+  // d'échantillon, et comme il est l'un des deux seuls filtres bloquants,
+  // son abstention vaudrait feu vert. Une absence de mesure n'est pas un
+  // succès — ici elle veut dire « pas encore évaluable ».
+  if (e.usdConnus < (s.microMinEchantillon ?? 0)) return false
+
+  // Déjà trop haut : entrer à vingt fois le palier, c'est entrer après le
+  // mouvement — exactement ce que le passage à 50 K devait supprimer.
+  if (s.entreeMaxRatio && e.mc > s.entreeMc * s.entreeMaxRatio) return false
+
+  return true
+}
+
 export function decisions(e, s) {
   const out = []
-  if (!e.entreeEvaluee && e.mc !== null && e.mc >= s.entreeMc) out.push('entree')
+  if (peutEvaluerEntree(e, s)) out.push('entree')
 
   // Les sorties ne concernent qu'une entrée réellement envoyée : suivre la
   // sortie d'un token rejeté n'aurait aucun lecteur.

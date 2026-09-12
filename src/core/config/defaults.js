@@ -85,6 +85,11 @@ export const CONFIG_V1 = {
       // Entrée. La graduation se fait à 410,9 SOL de capitalisation, soit
       // ~41 K$ avec le SOL à 99 $ : 50 K tombe juste après, sur PumpSwap.
       entry_mc: 50_000,
+      // Au-delà de ce multiple du palier, l'entrée est abandonnée plutôt que
+      // déclenchée : un token vu pour la première fois à vingt fois le palier
+      // a déjà fait son mouvement. Observé en production, des entrées à 93 M
+      // pour un palier à 50 K.
+      entry_max_ratio: 3,
 
       // Activité fabriquée : part des trades sous `micro_trade_usd`. En deçà
       // de `micro_min_sample` trades mesurés, le filtre s'abstient.

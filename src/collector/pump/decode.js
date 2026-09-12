@@ -164,11 +164,46 @@ export function decoderEvenement(b64) {
   return { programme: def.programme, nom: def.nom, data: lireChamps(new Lecteur(buf, 8), def.champs, def.types) }
 }
 
-/** Tous les événements reconnus d'une transaction, dans l'ordre des journaux. */
+/** Programmes dont on accepte les événements. */
+const NOS_PROGRAMMES = new Set([PUMP, PUMPSWAP])
+
+/**
+ * Tous les événements reconnus d'une transaction, dans l'ordre des journaux.
+ *
+ * ⚠️ Un discriminant Anchor est le hachage du SEUL NOM de l'événement :
+ * `sha256("event:TradeEvent")`. N'importe quel autre programme Solana ayant un
+ * événement nommé `TradeEvent` produit donc exactement le même préfixe de huit
+ * octets. Or on s'abonne aux transactions qui MENTIONNENT pump.fun, ce qui
+ * inclut celles des agrégateurs et des routeurs, où d'autres programmes
+ * écrivent aussi des lignes `Program data:`.
+ *
+ * Sans attribution, on lisait ces événements étrangers avec la grammaire de
+ * pump.fun. Résultat observé en production : des pseudo-mints qui ne sont pas
+ * des mints, des capitalisations à 93 M et des liquidités à 263 milliards.
+ *
+ * On reconstruit donc la pile d'appels — `Program <id> invoke [n]` empile,
+ * `success` ou `failed` dépile — et on ne décode que les lignes écrites
+ * pendant que l'un de NOS programmes est au sommet.
+ */
 export function evenementsDesLogs(logs) {
   const out = []
+  const pile = []
+
   for (const l of logs ?? []) {
+    if (l.startsWith('Program ') && l.includes(' invoke [')) {
+      pile.push(l.slice(8, l.indexOf(' invoke [')))
+      continue
+    }
+    if (l.startsWith('Program ') && (l.endsWith(' success') || l.includes(' failed'))) {
+      pile.pop()
+      continue
+    }
     if (!l.startsWith('Program data: ')) continue
+
+    // L'émetteur est le programme au sommet de la pile : un `emit!` s'exécute
+    // dans le programme en cours.
+    if (!NOS_PROGRAMMES.has(pile[pile.length - 1])) continue
+
     try {
       const e = decoderEvenement(l.slice(14))
       if (e) out.push(e)

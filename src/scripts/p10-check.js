@@ -11,7 +11,7 @@
 import { readFileSync } from 'node:fs'
 import { decoderEvenement, normaliser, evenementsDesLogs } from '../collector/pump/decode.js'
 import { creerEtat, appliquerTrade, partMicro, partDetenue, fenetres, auteurs, figerAuteurs,
-  decisions, paliersDus, multipleAtteint, Snipers } from '../collector/pump/state.js'
+  decisions, peutEvaluerEntree, paliersDus, multipleAtteint, Snipers } from '../collector/pump/state.js'
 import microTrades from '../pipeline/filters/stream/micro_trades.js'
 import realBuyers from '../pipeline/filters/stream/real_buyers.js'
 import { filtersFor, runFilters } from '../pipeline/filters/index.js'
@@ -112,6 +112,26 @@ verifier(amm.reserveQuote > 0 && amm.reserveBase > 0, 'réserves du pool PumpSwa
 verifier(evenementsDesLogs(['Program log: Instruction: Buy', 'Program data: !!!', 'Program data: AAAA']).length === 0,
   'lignes illisibles ignorées sans exception')
 
+// Attribution par la pile d'appels : un discriminant Anchor ne dépend que du
+// NOM de l'événement, donc un programme étranger nommant le sien `TradeEvent`
+// produit le même préfixe. La charge ci-dessous est un VRAI TradeEvent
+// pump.fun ; elle ne doit être lue que sous pump.fun.
+const charge = fx.pump.flatMap(tx => tx.data).find(b => decoderEvenement(b)?.nom === 'TradeEvent')
+const PUMP_ID = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P'
+const ETRANGER = 'JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4'
+verifier(evenementsDesLogs([
+  `Program ${PUMP_ID} invoke [1]`, `Program data: ${charge}`, `Program ${PUMP_ID} success`
+]).length === 1, 'événement émis par pump.fun : accepté')
+verifier(evenementsDesLogs([
+  `Program ${ETRANGER} invoke [1]`, `Program data: ${charge}`, `Program ${ETRANGER} success`
+]).length === 0, 'même charge émise par un programme étranger : ignorée')
+verifier(evenementsDesLogs([
+  `Program ${ETRANGER} invoke [1]`, `Program ${PUMP_ID} invoke [2]`, `Program data: ${charge}`,
+  `Program ${PUMP_ID} success`, `Program data: ${charge}`, `Program ${ETRANGER} success`
+]).length === 1, 'appel imbriqué : seul l\'événement écrit sous pump.fun est retenu')
+verifier(evenementsDesLogs([`Program data: ${charge}`]).length === 0,
+  'ligne sans pile d\'appels : ignorée plutôt que devinée')
+
 // --- 2. état et décisions ------------------------------------------------------------
 
 console.log('\n2. État et décisions')
@@ -135,6 +155,27 @@ verifier(decisions(e, S).length === 0, 'sous 50 K : aucune décision')
 
 appliquerTrade(e, trade('R4', 'buy', 800, 52_000, 3), opts(3))
 verifier(JSON.stringify(decisions(e, S)) === '["entree"]', 'franchissement de 50 K : entrée')
+
+// Conditions d'évaluabilité : elles ne jugent pas le token, elles vérifient
+// qu'on a de quoi le juger. Leur absence a produit en production des alertes
+// « 0 % sur 1 trade, 0 auteurs » sur des tokens qu'on ne savait pas lire.
+const Sc = { ...S, microMinEchantillon: 20, entreeMaxRatio: 3 }
+const evaluable = () => {
+  const x = creerEtat({ mint: 'E', creator: 'DEV', createdAt: t0, vuA: t0 })
+  for (let k = 0; k < 25; k++) appliquerTrade(x, trade(`A${k}`, 'buy', 2, 60_000, 0), opts())
+  return x
+}
+verifier(peutEvaluerEntree(evaluable(), Sc), 'token complet, mesuré et proche du palier : évaluable')
+const incomplet = evaluable(); incomplet.complet = false
+verifier(!peutEvaluerEntree(incomplet, Sc), 'token sans création vue : pas évaluable, ses auteurs sont inconnus')
+const maigre = creerEtat({ mint: 'F', creator: 'DEV', vuA: t0 })
+appliquerTrade(maigre, trade('A', 'buy', 2, 60_000, 0), opts())
+verifier(!peutEvaluerEntree(maigre, Sc), 'un seul trade mesuré : pas évaluable, l\'abstention vaudrait feu vert')
+const tropHaut = evaluable()
+appliquerTrade(tropHaut, trade('B', 'buy', 900, 93_300_000, 1), opts(1))
+verifier(!peutEvaluerEntree(tropHaut, Sc), '93 M pour un palier à 50 K : le mouvement a eu lieu, pas d\'entrée')
+verifier(peutEvaluerEntree(evaluable(), { ...Sc, entreeMaxRatio: null }),
+  'plafond de ratio absent : la condition ne s\'applique pas')
 e.entreeEvaluee = true
 verifier(decisions(e, S).length === 0, 'l\'entrée n\'est évaluée qu\'une fois')
 
