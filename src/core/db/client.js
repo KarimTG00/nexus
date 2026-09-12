@@ -25,6 +25,18 @@ const attente = ms => new Promise(r => setTimeout(r, ms))
 export async function connect({ retries = 5, baseDelayMs = 2000 } = {}) {
   if (db) return db
 
+  // Sans nom de base dans le chemin de l'URI, le pilote se rabat SILENCIEUSEMENT
+  // sur une base nommée `test`, qui est vide. Le worker démarrait alors, ne
+  // trouvait aucune configuration active, et plantait en boucle trois messages
+  // plus loin — sans que rien ne désigne la cause. Observé en production après
+  // la migration vers Railway, qui fournit son URI sans chemin.
+  const base = (process.env.MONGODB_URI ?? '').split('?')[0].split('/').slice(3).join('/')
+  if (!base) {
+    throw new Error('MONGODB_URI ne précise aucune base de données — le pilote se rabattrait '
+      + 'sur `test`, qui est vide. Ajouter le nom à la fin de l\'URI, '
+      + 'par exemple mongodb://…@hôte:27017/memecoins?authSource=admin')
+  }
+
   let derniere = null
 
   for (let essai = 1; essai <= retries; essai++) {
