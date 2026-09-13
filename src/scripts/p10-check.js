@@ -11,7 +11,8 @@
 import { readFileSync } from 'node:fs'
 import { decoderEvenement, normaliser, evenementsDesLogs } from '../collector/pump/decode.js'
 import { creerEtat, appliquerTrade, partMicro, partDetenue, fenetres, auteurs, figerAuteurs,
-  decisions, peutEvaluerEntree, paliersDus, multipleAtteint, Snipers } from '../collector/pump/state.js'
+  decisions, peutEvaluerEntree, paliersDus, multipleAtteint, Snipers,
+  marquerGraduation, croisementsDus, signauxCroisement } from '../collector/pump/state.js'
 import microTrades from '../pipeline/filters/stream/micro_trades.js'
 import realBuyers from '../pipeline/filters/stream/real_buyers.js'
 import { filtersFor, runFilters } from '../pipeline/filters/index.js'
@@ -366,6 +367,74 @@ verifier(reglages({}).endpoints.length >= 2 && reglages({}).multiples.length >= 
   'deux points d\'accès et des paliers échelonnés par défaut')
 verifier(reglages({}).envoyerSorties === false,
   'alertes de sortie enregistrées mais non envoyées par défaut')
+
+// --- 6. montées organiques et usine ---------------------------------------------------------
+
+console.log('\n6. Montées organiques et usine')
+const So = { entreeMc: 20_000, entreeMaxRatio: 3, microMinEchantillon: 0, multiples: [3], auteursMin: 2,
+  mesureMc: [10_000, 15_000, 20_000], organiqueSeul: true, ageOrganiqueMs: 2000 }
+const tc = (wallet, cote, usd, mc, s, tokens = 1000, venue = 'courbe') =>
+  ({ ts: t0 + s * 1000, wallet, cote, tokens, usd, prixUsd: mc / 1e9, mcUsd: mc, venue })
+const oc = s => ({ maxPremiers: 20, microUsd: 1, now: t0 + s * 1000 })
+
+// Usine : tout se passe dans la seconde de la création.
+const us = creerEtat({ mint: 'U', creator: 'FAB', createdAt: t0, vuA: t0 })
+appliquerTrade(us, tc('FAB', 'buy', 500, 25_000, 0.3), oc(0.3))
+const jugesUsine = croisementsDus(us, So)
+verifier(jugesUsine.length === 3 && jugesUsine.every(c => !c.retenu && c.raison === 'trop_jeune'),
+  'seuils franchis dans la seconde de création : écartés, jamais retenus')
+for (const c of jugesUsine) us.croisements.add(c.seuil)
+verifier(!peutEvaluerEntree(us, So), 'token dans sa première seconde : pas d\'entrée')
+verifier(marquerGraduation(us, t0 + 800) && us.usine === true && us.graduation.mcCourbe === 25_000,
+  'graduation 0,8 s après la création : usine')
+verifier(!marquerGraduation(us, t0 + 5000) && us.gradueA === t0 + 800, 'la graduation n\'est notée qu\'une fois')
+appliquerTrade(us, tc('PUMP', 'buy', 90_000, 3_000_000, 0.9, 1000, 'amm'), oc(0.9))
+verifier(us.graduation.mcAmm === 3_000_000 && us.mcMaxA === t0 + 900,
+  'saut mesuré au premier trade PumpSwap, instant du sommet noté')
+appliquerTrade(us, tc('PUMP', 'sell', 90_000, 1_400_000, 40, 1000, 'amm'), oc(40))
+verifier(us.premiereMoitie?.ts === t0 + 40_000 && us.premiereMoitie.sommet === 3_000_000 && us.premiereMoitie.sommetA === t0 + 900,
+  'première retombée sous la moitié du sommet : instant et sommet notés')
+verifier(croisementsDus(us, So).length === 0, 'seuils déjà jugés : jamais rejugés, même au-dessus')
+
+const lent = creerEtat({ mint: 'G', createdAt: t0, vuA: t0 })
+marquerGraduation(lent, t0 + 300_000)
+const inconnu = creerEtat({ mint: 'I', complet: false, vuA: t0 })
+marquerGraduation(inconnu, t0)
+verifier(lent.usine === false && inconnu.usine === null,
+  'graduation après 5 min : organique ; création non vue : délai inconnu, pas de verdict')
+
+// Organique : se construit sur la courbe pendant une minute.
+const og = creerEtat({ mint: 'O', creator: 'DEV', createdAt: t0, vuA: t0 })
+og.supply = 1_000_000
+appliquerTrade(og, tc('DEV', 'buy', 50, 3_000, 0, 50_000), oc(0))
+appliquerTrade(og, tc('BUN', 'buy', 30, 4_000, 0.5, 40_000), oc(0.5))
+for (let k = 1; k <= 8; k++) appliquerTrade(og, tc(`H${k}`, 'buy', 20, 4_000 + k * 700, 30 + k, 10_000), oc(30 + k))
+appliquerTrade(og, tc('DEV', 'sell', 10, 9_000, 45, 20_000), oc(45))
+appliquerTrade(og, tc('BIG', 'buy', 200, 16_000, 60, 100_000), oc(60))
+verifier(JSON.stringify(croisementsDus(og, So).map(c => [c.seuil, c.retenu])) === '[[10000,true],[15000,true]]',
+  'montée organique à 16 K après une minute : 10 K et 15 K retenus')
+
+const sg = signauxCroisement(og, { now: t0 + 60_000, nbAuteurs: 10 })
+verifier(sg.age_s === 60 && sg.part_dev === 0.03 && sg.dev_a_vendu === true,
+  `signaux : âge ${sg.age_s} s, part du créateur ${sg.part_dev} après sa vente`)
+verifier(sg.acheteurs_bloc0 === 1 && sg.part_bloc0 === 0.04,
+  'acheteurs de la première seconde comptés hors créateur, avec leur part')
+verifier(sg.part_top10 === 0.24 && sg.detenteurs === 11 && sg.premiers_vendeurs === 1,
+  `concentration : top 10 ${sg.part_top10}, ${sg.detenteurs} détenteurs, ${sg.premiers_vendeurs} premier acheteur vendeur`)
+
+appliquerTrade(og, tc('R', 'buy', 50, 21_000, 70), oc(70))
+verifier(peutEvaluerEntree(og, So), 'montée organique franchissant 20 K : entrée évaluable')
+verifier(!peutEvaluerEntree({ ...og, gradue: true }, So), 'token déjà gradué : plus organique, pas d\'entrée')
+
+const dp = creerEtat({ mint: 'D', createdAt: t0, vuA: t0 })
+appliquerTrade(dp, tc('A', 'buy', 100, 40_000, 10), oc(10))
+verifier(JSON.stringify(croisementsDus(dp, So).map(c => c.raison)) === '["deja_passe",null,null]',
+  'vu d\'un coup à 40 K : 10 K déjà dépassé de plus de 3×, 15 K et 20 K retenus')
+
+const rg = reglages({})
+verifier(rg.entreeMc === 20_000 && rg.organiqueSeul === true && rg.ageOrganiqueMs === 2000 && rg.usineMaxMs === 2000
+  && JSON.stringify(rg.mesureMc) === '[10000,15000,20000,30000]',
+  'par défaut : entrée organique à 20 K, seuils mesurés 10 K à 30 K')
 
 console.log(`\n${ok} vérifications passées, ${ko} en échec`)
 process.exit(ko ? 1 : 0)

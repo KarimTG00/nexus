@@ -217,6 +217,19 @@ export const collections = [
     indexes: [{ key: { debut: -1 }, name: 'ix_debut' }]
   },
 
+  {
+    // Montées organiques franchissant un seuil MESURÉ (10 K, 15 K…), avec
+    // leurs signaux au croisement. Ni filtre, ni alerte, ni outcome : c'est la
+    // matière dont M10 tire le seuil d'entrée et ses filtres. Sans expiration,
+    // quelques Mo par jour.
+    name: 'stream_crossings',
+    indexes: [
+      { key: { ts: -1 },           name: 'ix_ts' },
+      { key: { seuil: 1, ts: -1 }, name: 'ix_seuil' },
+      { key: { token: 1 },         name: 'ix_token' }
+    ]
+  },
+
   // --- collections analytiques : pré-calculées pour le dashboard ------------
   ...['funnel', 'filter_perf', 'wallets', 'deployers',
       'blindspots', 'discovery', 'regime', 'proposals', 'succes', 'strategie'].map(n => ({

@@ -28,7 +28,8 @@ import { mod } from '../../core/logger.js'
 import { CONFIG_V1 } from '../../core/config/defaults.js'
 import { fournisseur } from '../../adapters/rpc/providers.js'
 import { PUMP, PUMPSWAP, WSOL, evenementsDesLogs, normaliser, decoderPool } from './decode.js'
-import { creerEtat, appliquerTrade, decisions, paliersDus, Snipers } from './state.js'
+import { creerEtat, appliquerTrade, decisions, paliersDus, Snipers,
+  marquerGraduation, croisementsDus, signauxCroisement } from './state.js'
 import { evaluerEntree, alerterSortie } from './alertes.js'
 import * as live from '../../repos/live.js'
 
@@ -43,6 +44,10 @@ export function reglages(cfg) {
     endpoints: s.endpoints,
     entreeMc: s.entry_mc,
     entreeMaxRatio: s.entry_max_ratio,
+    mesureMc: [...(s.measure_mc ?? [])].sort((a, b) => a - b),
+    organiqueSeul: Boolean(s.organic_only),
+    ageOrganiqueMs: (s.organic_min_age_seconds ?? 0) * 1000,
+    usineMaxMs: (s.factory_max_seconds ?? 2) * 1000,
     multiples: [...(s.exit_multiples ?? [])].sort((a, b) => a - b),
     envoyerSorties: Boolean(s.send_exit_alerts),
     auteursMin: s.exit_authors_min,
@@ -93,7 +98,8 @@ let resolutionEnCours = false
 const stats = {
   messages: 0, doublons: 0, echecs: 0, evenements: 0, trades: 0, creations: 0,
   graduations: 0, sansCours: 0, poolsResolus: 0, poolsEnEchec: 0,
-  entrees: 0, sorties: 0, tradesEcrits: 0, persistes: 0, archives: 0
+  entrees: 0, sorties: 0, tradesEcrits: 0, persistes: 0, archives: 0,
+  croisements: 0, croisementsEcartes: 0
 }
 
 // --- connexions ------------------------------------------------------------------
@@ -223,7 +229,7 @@ function traiter(evt, sig, i) {
     case 'complete': {
       stats.graduations++
       const e = etats.get(n.mint)
-      if (e) { e.gradue = true; e.gradueA = n.ts; e.sale = true }
+      if (e && marquerGraduation(e, n.ts, { usineMaxMs: S.usineMaxMs })) e.sale = true
       return
     }
     case 'pool': return surPool(n)
@@ -308,7 +314,7 @@ function surTrade(n, sig, i, now) {
   const mcUsd = prixUsd !== null ? prixUsd * offre : null
 
   if (n.venue === 'amm') {
-    if (!e.gradue) { e.gradue = true; e.gradueA = e.gradueA ?? n.ts }
+    marquerGraduation(e, n.ts, { usineMaxMs: S.usineMaxMs })
     if (n.pool && !e.pool) e.pool = n.pool
   }
 
@@ -352,6 +358,14 @@ function surTrade(n, sig, i, now) {
   }
 
   for (const d of decisions(e, S)) agir(d, e, now)
+
+  // --- seuils mesurés : chaque montée organique, avec ses signaux ---------------
+  for (const c of croisementsDus(e, S)) {
+    e.croisements.add(c.seuil)
+    if (!c.retenu) { stats.croisementsEcartes++; continue }
+    stats.croisements++
+    enregistrerCroisement(e, c.seuil, now)
+  }
 }
 
 function agir(d, e, now) {
@@ -374,6 +388,27 @@ function agir(d, e, now) {
   stats.sorties++
   alerterSortie(e, d, { cfg: cfgCourante, s: S })
     .catch(err => log.error({ mint: e.mint, type: d, err: err.message }, 'alerte de sortie en échec'))
+}
+
+/**
+ * Enregistre un croisement mesuré. Ni filtre ni outcome : le suivi d'outcome
+ * interroge Mobula pour chaque snapshot ouvert, et plusieurs centaines de
+ * croisements par jour sur quatre seuils le rendraient ruineux. Ce que le
+ * token devient se lit dans le flux lui-même (sommet, graduation).
+ */
+function enregistrerCroisement(e, seuil, now) {
+  const tokenId = live.idToken(e.mint)
+  const signaux = signauxCroisement(e, { now, microUsd: S.microUsd, nbAuteurs: S.nbAuteurs,
+    estSniper: w => snipers.est(w, now) })
+  // Passé du créateur : une requête par token, partagée par tous ses seuils.
+  e.historiqueCreateur ??= live.historiqueCreateur(e.creator, tokenId, e.createdAt).catch(() => null)
+  e.historiqueCreateur
+    .then(createur => live.enregistrerCroisement({
+      _id: `${tokenId}:${seuil}`, token: tokenId, symbol: e.symbol, seuil,
+      ts: new Date(now), trade_ts: e.dernierTradeA ? new Date(e.dernierTradeA) : null,
+      config_version: cfgCourante._id, signaux, createur
+    }))
+    .catch(err => log.warn({ mint: e.mint, seuil, err: err.message }, 'croisement non enregistré'))
 }
 
 // --- tâches périodiques ----------------------------------------------------------
@@ -532,6 +567,15 @@ function etatDepuisDoc(d) {
   e.gradue = Boolean(l.graduated)
   e.gradueA = l.graduated_at ? +l.graduated_at : null
   e.pool = l.pool ?? null
+  e.usine = l.factory ?? null
+  e.graduation = l.graduation ? { mcCourbe: l.graduation.mc_curve ?? null, mcAmm: l.graduation.mc_amm ?? null } : null
+  e.mcMaxA = l.mc_max_at ? +l.mc_max_at : null
+  e.premiereMoitie = l.first_halving
+    ? { ts: +l.first_halving.at, sommet: l.first_halving.peak, sommetA: l.first_halving.peak_at ? +l.first_halving.peak_at : null }
+    : null
+  // Seuils déjà dépassés : sans eux, la simple reprise d'un token déjà
+  // au-dessus serait enregistrée comme un croisement.
+  for (const seuil of S.mesureMc) if (e.mcMax >= seuil) e.croisements.add(seuil)
   e.auteursFiges = l.authors ?? null
   e.ventesAuteursAvant = l.authors_sold_before_entry ?? 0
   e.ventesAuteurs = new Map((l.author_sells ?? []).map(v => [v.wallet, { ts: +v.ts, tokens: v.tokens }]))

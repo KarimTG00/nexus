@@ -91,12 +91,37 @@ export const CONFIG_V1 = {
       // courbe : il marque la graduation. Tout seuil entre 30 K et 42 K
       // déclenche au premier ou deuxième trade du token, là où aucun signal
       // n'existe encore — c'est `micro_min_sample` qui décide vraiment.
-      entry_mc: 40_000,
+      //
+      // Ramené à 20 K, SUR LA COURBE (voir `organic_only`) : sur 1 270 tokens
+      // organiques, 44 % de ceux qui passent 20 K font ×2 et 21 % ×3, contre
+      // 27 % et 16 % à 40 K. Plus bas, les taux ne montent plus et le nombre
+      // de candidats triple. Seuil provisoire : `measure_mc` le remettra en
+      // cause sur données.
+      entry_mc: 20_000,
       // Au-delà de ce multiple du palier, l'entrée est abandonnée plutôt que
       // déclenchée : un token vu pour la première fois à vingt fois le palier
       // a déjà fait son mouvement. Observé en production, des entrées à 93 M
       // pour un palier à 50 K.
       entry_max_ratio: 3,
+
+      // Montées ORGANIQUES seulement : un token encore sur la courbe, vieux
+      // d'au moins `organic_min_age_seconds`. Mesuré sur 1 702 tokens vus
+      // depuis leur création : 289 des 291 tokens passés à 1 M ont gradué
+      // dans la seconde de leur création (usine), sans aucun instant pour
+      // entrer. Les organiques sont rares, mais ce sont les seuls attrapables.
+      organic_only: true,
+      organic_min_age_seconds: 2,
+      // Graduation à moins de `factory_max_seconds` de la création : usine.
+      // Observée, jamais alertée.
+      factory_max_seconds: 2,
+
+      // Seuils MESURÉS en silence — sans filtre, sans alerte, sans outcome :
+      // chaque montée organique qui les franchit est enregistrée avec ses
+      // signaux dans `stream_crossings`. M10 en tire, seuil par seuil,
+      // l'entonnoir et le pouvoir séparateur de chaque signal : c'est ce qui
+      // choisira le seuil d'entrée définitif et ses filtres. Pas d'outcome,
+      // parce que leur suivi interroge Mobula pour chaque snapshot.
+      measure_mc: [10_000, 15_000, 20_000, 30_000],
 
       // Activité fabriquée : part des trades sous `micro_trade_usd`. En deçà
       // de `micro_min_sample` trades mesurés, le filtre s'abstient.

@@ -48,7 +48,20 @@ export function creerEtat({ mint, symbol = null, name = null, uri = null, creato
     auteursFiges: null,        // liste arrêtée à l'alerte d'entrée
     partAuteurs: null,         // part de l'offre qu'ils détiennent encore
     ventesAuteurs: new Map(),  // auteur → première vente APRÈS l'entrée
-    ventesAuteursAvant: 0      // auteurs ayant déjà vendu avant l'entrée
+    ventesAuteursAvant: 0,     // auteurs ayant déjà vendu avant l'entrée
+
+    // Trajectoire : instant du sommet, et première retombée à la moitié du
+    // sommet d'alors — la vitesse de la chute décide du temps pour sortir.
+    mcMaxA: null,
+    premiereMoitie: null,      // { ts, sommet, sommetA }
+
+    // Graduation : `usine` est vrai quand elle a lieu dans la seconde de la
+    // création — le saut fabriqué, impossible à capter.
+    usine: null,
+    graduation: null,          // { mcCourbe, mcAmm }
+
+    // Seuils de mesure déjà jugés (retenus ou écartés) : chacun une seule fois.
+    croisements: new Set()
   }
 }
 
@@ -93,7 +106,12 @@ export function appliquerTrade(e, t, { maxPremiers = 20, microUsd = 1, now = Dat
   const mcConnue = t.mcUsd !== null && t.mcUsd !== undefined && Number.isFinite(t.mcUsd)
   if (mcConnue) {
     e.mc = t.mcUsd
-    if (t.mcUsd > e.mcMax) e.mcMax = t.mcUsd
+    if (t.mcUsd > e.mcMax) { e.mcMax = t.mcUsd; e.mcMaxA = t.ts }
+    if (!e.premiereMoitie && e.mcMax > 0 && t.mcUsd <= e.mcMax / 2) {
+      e.premiereMoitie = { ts: t.ts, sommet: e.mcMax, sommetA: e.mcMaxA }
+    }
+    // Taille du saut de graduation : la capitalisation au premier trade PumpSwap.
+    if (e.graduation && e.graduation.mcAmm === null && t.venue === 'amm') e.graduation.mcAmm = t.mcUsd
   }
 
   // Une vente d'auteur ne compte qu'une fois par auteur, et seulement après
@@ -251,7 +269,127 @@ export function peutEvaluerEntree(e, s) {
   // aussi le token qui arrive directement au-dessus de la bande.
   if (s.entreeMaxRatio && e.mcMax > s.entreeMc * s.entreeMaxRatio) return false
 
+  // Organiques seulement. Un token d'usine gradue dans la seconde de sa
+  // création : l'évaluer produirait une alerte sur un mouvement terminé.
+  if (s.organiqueSeul && !estOrganique(e, s)) return false
+
   return true
+}
+
+/**
+ * Le token se construit-il sur la courbe ? Vrai tant qu'il n'a pas gradué et
+ * qu'il a vécu au moins `ageOrganiqueMs` — en temps de la chaîne (dernier
+ * trade − création), pas en temps de réception.
+ */
+export function estOrganique(e, s) {
+  if (e.gradue || !e.createdAt || e.dernierTradeA === null) return false
+  return e.dernierTradeA - e.createdAt >= (s.ageOrganiqueMs ?? 0)
+}
+
+/**
+ * Graduation, notée une seule fois au premier signe (CompleteEvent ou premier
+ * trade PumpSwap). `usine` n'est tranché que pour un token vu depuis sa
+ * création : sans elle, le délai est inconnu.
+ * @returns {boolean} vrai si la graduation vient d'être notée
+ */
+export function marquerGraduation(e, ts, { usineMaxMs = 2000 } = {}) {
+  if (e.gradue) return false
+  e.gradue = true
+  e.gradueA = ts
+  e.usine = e.complet && e.createdAt ? ts - e.createdAt <= usineMaxMs : null
+  e.graduation = { mcCourbe: e.mc, mcAmm: null }
+  return true
+}
+
+/**
+ * Seuils de mesure franchis et pas encore jugés.
+ *
+ * Chaque seuil est jugé UNE fois, au premier trade qui le franchit : retenu
+ * pour une montée organique, écarté sinon, avec la raison. L'appelant marque
+ * le seuil dans `e.croisements` dans les deux cas — sans quoi un token écarté
+ * serait rejugé à chaque trade, et finirait retenu en redescendant.
+ */
+export function croisementsDus(e, s) {
+  const out = []
+  if (!s.mesureMc?.length || e.mc === null) return out
+  for (const seuil of s.mesureMc) {
+    if (e.croisements.has(seuil) || e.mc < seuil) continue
+    let raison = null
+    if (!e.complet) raison = 'creation_non_vue'
+    else if (e.gradue) raison = e.usine ? 'usine' : 'gradue'
+    else if (!estOrganique(e, s)) raison = 'trop_jeune'
+    else if (s.entreeMaxRatio && e.mcMax > seuil * s.entreeMaxRatio) raison = 'deja_passe'
+    out.push({ seuil, retenu: raison === null, raison })
+  }
+  return out
+}
+
+/**
+ * Ce qu'on sait d'un token à l'instant où il franchit un seuil, calculé sur
+ * notre seul registre de trades. Ces mesures ne décident rien : M10 compare
+ * leur pouvoir séparateur entre les tokens qui montent et ceux qui meurent,
+ * et c'est ce pouvoir, mesuré, qui en fera des filtres.
+ */
+export function signauxCroisement(e, { now = Date.now(), microUsd = 1, nbAuteurs = 10, estSniper = () => false } = {}) {
+  const offre = e.supply ?? 1e9
+  const w5 = fenetres(e, now, { microUsd })['5min']
+
+  const depuis = now - MIN
+  const acheteurs1 = new Set()
+  let achats1 = 0, ventes1 = 0, volume1 = 0
+  for (const r of e.recents) {
+    if (r.ts < depuis) continue
+    if (r.cote === 'buy') { achats1++; acheteurs1.add(r.wallet) } else ventes1++
+    if (r.usd !== null) volume1 += r.usd
+  }
+
+  // Soldes nets d'après notre registre : valables pour un token complet.
+  const soldes = []
+  let acheteurs = 0
+  for (const x of e.wallets.values()) {
+    if (x.achats > 0) acheteurs++
+    const solde = (x.tokensAchetes ?? 0) - (x.tokensVendus ?? 0)
+    if (solde > 0) soldes.push(solde)
+  }
+  soldes.sort((a, b) => b - a)
+  const top10 = +(soldes.slice(0, 10).reduce((s, x) => s + x, 0) / offre).toFixed(6)
+
+  const dev = e.creator ? e.wallets.get(e.creator) : null
+  const premiers = e.premiers.slice(0, nbAuteurs)
+  // Acheteurs de la première seconde, créateur exclu : le groupe préparé
+  // d'avance, quand il y en a un.
+  const bloc0 = e.createdAt ? e.premiers.filter(p => p.wallet !== e.creator && p.ts - e.createdAt <= 1000) : []
+  const part = e.usdConnus ? e.micro / e.usdConnus : null
+
+  return {
+    age_s: e.createdAt && e.dernierTradeA !== null ? Math.round((e.dernierTradeA - e.createdAt) / 1000) : null,
+    mc: e.mc,
+    liquidite_usd: e.liquiditeUsd === null ? null : Math.round(e.liquiditeUsd),
+    trades: e.n,
+    achats: e.achats,
+    ventes: e.ventes,
+    ratio_achats_ventes: e.ventes ? +(e.achats / e.ventes).toFixed(3) : null,
+    acheteurs,
+    acheteurs_reels: e.acheteursReels,
+    part_micro: part === null ? null : +part.toFixed(4),
+    volume_usd: Math.round(e.volumeUsd),
+    achats_1min: achats1,
+    ventes_1min: ventes1,
+    acheteurs_1min: acheteurs1.size,
+    volume_1min_usd: Math.round(volume1),
+    achats_5min: w5.buys,
+    ventes_5min: w5.sells,
+    acheteurs_reels_5min: w5.buyersReels,
+    variation_5min: w5.variation === null ? null : +w5.variation.toFixed(3),
+    detenteurs: soldes.length,
+    part_top10: e.complet ? top10 : null,
+    part_dev: e.complet && e.creator ? partDetenue(e, [e.creator]) : null,
+    dev_a_vendu: Boolean(dev?.ventes),
+    acheteurs_bloc0: bloc0.length,
+    part_bloc0: e.complet && bloc0.length ? partDetenue(e, bloc0.map(p => p.wallet)) : 0,
+    premiers_vendeurs: premiers.filter(p => (e.wallets.get(p.wallet)?.ventes ?? 0) > 0).length,
+    premiers_snipers: premiers.filter(p => estSniper(p.wallet)).length
+  }
 }
 
 /**

@@ -5,6 +5,7 @@
  *   tokens      les tokens suivis en direct, avec leur sous-document `live`
  *   trades      les trades individuels retenus pour l'étude
  *   pump_pools  la correspondance pool PumpSwap → mint
+ *   stream_crossings  les montées organiques franchissant un seuil mesuré
  *
  * Les valeurs temps réel vivent dans `live.*` et JAMAIS dans `market.*` : la
  * découverte Mobula réécrit `market` à chaque passage, et deux sources qui
@@ -28,7 +29,7 @@ export const idToken = mint => `solana:${mint}`
  * s'effacerait jamais.
  */
 export async function assurerIndex() {
-  for (const c of collections.filter(x => ['trades', 'pump_pools', 'stream_gaps'].includes(x.name))) {
+  for (const c of collections.filter(x => ['trades', 'pump_pools', 'stream_gaps', 'stream_crossings'].includes(x.name))) {
     for (const { key, ...options } of c.indexes ?? []) {
       try {
         await col(c.name).createIndex(key, options)
@@ -85,6 +86,16 @@ export function docLive(e) {
     buyers: acheteurs,
     graduated: e.gradue,
     graduated_at: e.gradueA ? new Date(e.gradueA) : null,
+    // Graduation dans la seconde de la création : le saut d'usine.
+    factory: e.usine ?? null,
+    curve_seconds: e.gradueA && e.createdAt ? Math.round((e.gradueA - e.createdAt) / 1000) : null,
+    graduation: e.graduation ? { mc_curve: e.graduation.mcCourbe, mc_amm: e.graduation.mcAmm } : null,
+    mc_max_at: e.mcMaxA ? new Date(e.mcMaxA) : null,
+    first_halving: e.premiereMoitie ? {
+      at: new Date(e.premiereMoitie.ts),
+      peak: e.premiereMoitie.sommet,
+      peak_at: e.premiereMoitie.sommetA ? new Date(e.premiereMoitie.sommetA) : null
+    } : null,
     pool: e.pool,
     first_buyers: e.premiers.map(p => ({ wallet: p.wallet, rank: p.rang, ts: new Date(p.ts) })),
     authors: e.auteursFiges,
@@ -201,6 +212,38 @@ export async function ajouterTrades(docs) {
   } catch (e) {
     if (e.code === 11000 || e.writeErrors?.every?.(w => w.code === 11000)) return e.insertedCount ?? 0
     throw e
+  }
+}
+
+/** Croisement mesuré d'un seuil. Un doublon (redémarrage) n'est pas une erreur. */
+export async function enregistrerCroisement(doc) {
+  try {
+    await col('stream_crossings').insertOne(doc)
+    return true
+  } catch (e) {
+    if (e.code === 11000) return false
+    throw e
+  }
+}
+
+/**
+ * Passé du créateur : ses tokens connus ANTÉRIEURS à celui-ci, et ce qu'ils
+ * sont devenus. Un token créé après ne pouvait pas être connu au moment du
+ * croisement : le compter donnerait au signal une avance qu'il n'a pas.
+ * Seuls les tokens écrits en base (passés à `persist_mc`) sont connus.
+ */
+export async function historiqueCreateur(creator, sauf, avant) {
+  if (!creator) return null
+  const filtre = { deployer: creator, _id: { $ne: sauf } }
+  if (avant) filtre.created_at = { $lt: new Date(avant) }
+  const docs = await col('tokens').find(filtre,
+    { projection: { 'live.graduated': 1, 'live.mc_max': 1, 'live.factory': 1 } }).limit(1000).toArray()
+  return {
+    tokens: docs.length,
+    gradues: docs.filter(d => d.live?.graduated).length,
+    usine: docs.filter(d => d.live?.factory).length,
+    au_dessus_100k: docs.filter(d => (d.live?.mc_max ?? 0) >= 100_000).length,
+    sommet_max: docs.reduce((m, d) => Math.max(m, d.live?.mc_max ?? 0), 0)
   }
 }
 

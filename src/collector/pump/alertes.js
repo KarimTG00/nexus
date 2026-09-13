@@ -1,7 +1,7 @@
 /**
  * Décisions du flux temps réel : l'entrée, et les sorties.
  *
- *   entrée   le token franchit `entry_mc` (50 K) et passe les filtres
+ *   entrée   une montée organique franchit `entry_mc` (20 K) et passe les filtres
  *   ×N       sa capitalisation atteint un multiple de celle de l'entrée
  *   auteurs  plusieurs de ses auteurs se mettent à vendre
  *
@@ -37,7 +37,7 @@ import { getNotifier } from '../../pipeline/stages/dispatch.js'
 import { esc, usd, age } from '../../adapters/notifiers/telegram.js'
 import * as triggersRepo from '../../repos/triggers.js'
 import * as live from '../../repos/live.js'
-import { partMicro, fenetres, auteurs, figerAuteurs } from './state.js'
+import { partMicro, fenetres, auteurs, figerAuteurs, signauxCroisement } from './state.js'
 
 const log = mod('collector:pump:alertes')
 
@@ -77,7 +77,11 @@ export async function evaluerEntree(e, { cfg, s, snipers, now = Date.now() }) {
     authors: liste,
     authors_share: e.partAuteurs,
     authors_sold_before_entry: e.ventesAuteursAvant,
-    sniper_excluded: e.premiers.slice(0, s.nbAuteurs).filter(p => snipers.est(p.wallet, now)).length
+    sniper_excluded: e.premiers.slice(0, s.nbAuteurs).filter(p => snipers.est(p.wallet, now)).length,
+    // Mêmes signaux que les croisements mesurés, pour comparer l'entrée alertée
+    // à la population dont elle est tirée.
+    signaux: signauxCroisement(e, { now, microUsd: s.microUsd, nbAuteurs: s.nbAuteurs,
+      estSniper: x => snipers.est(x, now) })
   }
 
   const ctx = {
@@ -180,6 +184,7 @@ export async function evaluerEntree(e, { cfg, s, snipers, now = Date.now() }) {
     '',
     `MC *${esc(usd(e.mc))}* · ${esc(sens)} · sommet ${esc(usd(e.mcMax))}`,
     `${esc(e.gradue ? 'PumpSwap' : 'courbe')} · liquidité ${esc(usd(e.liquiditeUsd))}`,
+    esc(`🏗️ ${mesures.signaux.age_s ?? '?'} s sur la courbe · top 10 ${pct(mesures.signaux.part_top10)} · dev ${pct(mesures.signaux.part_dev)}${mesures.signaux.dev_a_vendu ? ' (a vendu)' : ''}`),
     '',
     `🧪 Trades sous ${esc(usd(s.microUsd))} : *${esc(pct(mesures.micro_share))}* sur ${esc(e.usdConnus)}`,
     `🙋 Acheteurs réels : *${esc(mesures.real_buyers_5m)}* sur 5 min · ${esc(mesures.real_buyers_total)} au total`,

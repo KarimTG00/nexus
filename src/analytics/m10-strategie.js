@@ -305,6 +305,131 @@ export async function balayage() {
   return lignes
 }
 
+/**
+ * Montées organiques : chaque croisement mesuré et ce que le token est
+ * devenu. Gagnant : sommet ≥ `multipleGagnant` fois la capitalisation au
+ * croisement. Pour chaque seuil, l'entonnoir puis le pouvoir séparateur de
+ * chaque signal, les plus séparateurs en tête.
+ *
+ * Le sommet est `live.mc_max`. Un croisement retenu est une montée (sommet au
+ * plus 3× le seuil à cet instant), donc le sommet final lui est postérieur.
+ * Les croisements de moins de `reculHeures` sont écartés : leur token n'a pas
+ * fini de monter ou de mourir.
+ */
+export async function organiques({ multipleGagnant = 3, reculHeures = 6 } = {}) {
+  const croisements = await col('stream_crossings')
+    .find({ ts: { $lte: new Date(Date.now() - reculHeures * 3_600_000) } }).toArray()
+  const toks = await col('tokens').find({ _id: { $in: [...new Set(croisements.map(c => c.token))] } },
+    { projection: { 'live.mc_max': 1, 'live.graduated': 1 } }).toArray()
+  const parId = new Map(toks.map(t => [t._id, t.live ?? {}]))
+
+  const instants = croisements.map(c => +c.ts)
+  const jours = instants.length > 1
+    ? (instants.reduce((m, v) => Math.max(m, v), 0) - instants.reduce((m, v) => Math.min(m, v), Infinity)) / 86_400_000
+    : 0
+  const num = v => (typeof v === 'boolean' ? Number(v) : typeof v === 'number' && Number.isFinite(v) ? v : null)
+
+  const seuils = []
+  for (const seuil of [...new Set(croisements.map(c => c.seuil))].sort((a, b) => a - b)) {
+    const lignes = croisements.filter(c => c.seuil === seuil).map(c => {
+      const l = parId.get(c.token) ?? {}
+      const valeurs = { ...c.signaux }
+      for (const [k, v] of Object.entries(c.createur ?? {})) valeurs[`createur_${k}`] = v
+      delete valeurs.mc
+      return { valeurs, sommet: l.mc_max ?? null, gradue: Boolean(l.graduated),
+        multiple: l.mc_max && c.signaux?.mc ? l.mc_max / c.signaux.mc : null }
+    }).filter(x => x.multiple !== null)
+
+    const n = lignes.length
+    const taux = f => (n ? +(lignes.filter(f).length / n).toFixed(3) : null)
+    const gagnants = lignes.filter(x => x.multiple >= multipleGagnant)
+    const perdants = lignes.filter(x => x.multiple < multipleGagnant)
+    const noms = [...new Set(lignes.flatMap(x => Object.keys(x.valeurs)))]
+    const separation = noms
+      .map(k => comparer(k,
+        gagnants.map(x => num(x.valeurs[k])).filter(v => v !== null),
+        perdants.map(x => num(x.valeurs[k])).filter(v => v !== null)))
+      .sort((a, b) => Math.abs((b.auc ?? 0.5) - 0.5) - Math.abs((a.auc ?? 0.5) - 0.5))
+
+    seuils.push({
+      seuil,
+      croisements: n,
+      par_jour: jours ? Math.round(n / jours) : null,
+      gradue: taux(x => x.gradue),
+      x2: taux(x => x.multiple >= 2),
+      x3: taux(x => x.multiple >= 3),
+      x10: taux(x => x.multiple >= 10),
+      au_dessus_100k: taux(x => x.sommet >= 100_000),
+      au_dessus_1m: taux(x => x.sommet >= 1_000_000),
+      multiple_median: n ? +mediane(lignes.map(x => x.multiple)).toFixed(2) : null,
+      separation
+    })
+  }
+  return { recul_heures: reculHeures, multiple_gagnant: multipleGagnant, seuils }
+}
+
+/**
+ * Tokens d'usine : graduation dans la seconde de la création. Observés, jamais
+ * alertés — pour voir s'ils changent de forme (rythme, taille du saut, acteurs
+ * récurrents) et à quelle vitesse ils retombent après le saut.
+ *
+ * Les tokens gradués avant le marquage `live.factory` sont classés sur le
+ * délai création → graduation, qui est la même définition.
+ */
+export async function usine({ maxSecondes = 2 } = {}) {
+  const docs = await col('tokens').find(
+    { 'live.source': 'stream', 'live.complet': true, 'live.graduated': true, created_at: { $ne: null } },
+    { projection: { created_at: 1, deployer: 1, 'live.factory': 1, 'live.graduated_at': 1, 'live.mc_max': 1,
+      'live.mc_max_at': 1, 'live.first_halving': 1, 'live.first_buyers': 1 } }
+  ).toArray()
+
+  const estUsine = d => {
+    if (typeof d.live.factory === 'boolean') return d.live.factory
+    if (!d.live.graduated_at) return null
+    return (+d.live.graduated_at - +d.created_at) / 1000 <= maxSecondes
+  }
+  const classes = docs.filter(d => estUsine(d) !== null)
+  const fab = classes.filter(d => estUsine(d))
+
+  const parJour = {}
+  for (const d of fab) {
+    const j = new Date(d.created_at).toISOString().slice(0, 10)
+    parJour[j] = (parJour[j] ?? 0) + 1
+  }
+  const sommets = fab.map(d => d.live.mc_max).filter(v => v > 0)
+  const versSommet = fab
+    .map(d => (d.live.mc_max_at ? (+d.live.mc_max_at - +d.created_at) / 1000 : null))
+    .filter(v => v !== null && v >= 0)
+  const versMoitie = fab
+    .map(d => (d.live.first_halving?.at && d.live.first_halving?.peak_at
+      ? (+d.live.first_halving.at - +d.live.first_halving.peak_at) / 1000 : null))
+    .filter(v => v !== null && v >= 0)
+
+  const recurrents = liste => {
+    const n = new Map()
+    for (const x of liste) n.set(x, (n.get(x) ?? 0) + 1)
+    return [...n.entries()].filter(([, k]) => k >= 2).sort((a, b) => b[1] - a[1]).slice(0, 10)
+      .map(([id, tokens]) => ({ id, tokens }))
+  }
+
+  return {
+    gradues_classes: classes.length,
+    usine: fab.length,
+    part_usine: classes.length ? +(fab.length / classes.length).toFixed(3) : null,
+    par_jour: parJour,
+    sommet_median: sommets.length ? Math.round(mediane(sommets)) : null,
+    sommet_p75: sommets.length ? Math.round(quantile(sommets, 0.75)) : null,
+    au_dessus_1m: fab.filter(d => d.live.mc_max >= 1_000_000).length,
+    secondes_vers_sommet_mediane: versSommet.length >= MIN_GROUPE ? Math.round(mediane(versSommet)) : null,
+    secondes_sommet_vers_moitie_mediane: versMoitie.length >= MIN_GROUPE ? Math.round(mediane(versMoitie)) : null,
+    mesures_de_chute: versMoitie.length,
+    createurs_recurrents: recurrents(fab.map(d => d.deployer).filter(Boolean)),
+    // Les premiers acheteurs d'un token d'usine sont ceux du saut : leur
+    // récurrence d'un token à l'autre dit si l'usine tourne avec les mêmes wallets.
+    premiers_acheteurs_recurrents: recurrents(fab.flatMap(d => (d.live.first_buyers ?? []).map(b => b.wallet)))
+  }
+}
+
 /** Rapport complet. */
 export async function rapport(cfg) {
   const pop = await population()
@@ -339,7 +464,9 @@ export async function rapport(cfg) {
 
     avance_signal: await avanceSignal(),
     esperance: await esperance(cfg),
-    balayage: await balayage()
+    balayage: await balayage(),
+    organiques: await organiques(),
+    usine: await usine()
   }
 }
 
@@ -349,7 +476,9 @@ export async function run(cfg, opts = {}) {
   await col('analytics_strategie').updateOne({ period: r.period }, { $set: r }, { upsert: true })
   log.info({
     vus: r.population.vus, alertes: r.population.alertes, montes: r.population.montes,
-    micro_auc: r.separation[0]?.auc, avance: r.avance_signal?.verdict
+    micro_auc: r.separation[0]?.auc, avance: r.avance_signal?.verdict,
+    croisements: r.organiques.seuils.map(s => `${s.seuil}:${s.croisements}`).join(' '),
+    usine: r.usine.usine, part_usine: r.usine.part_usine
   }, 'M10 — mise à l\'épreuve de la stratégie')
   return r
 }
