@@ -55,6 +55,7 @@ export function reglages(cfg) {
     mesureSeule: s.measure_only_filters,
     persistMc: s.persist_mc,
     etudeMc: s.study_mc,
+    etudeMax: s.study_max_trades,
     temoinPourMille: s.control_permille,
     inactifMin: s.idle_minutes,
     suiviHeures: s.follow_hours,
@@ -325,13 +326,19 @@ function surTrade(n, sig, i, now) {
     usd, price_usd: prixUsd, mc_usd: mcUsd, rank: e.n
   }
   if (e.etude) {
-    aEcrire.push(doc)
+    // Plafond par token : au-delà, un token à plusieurs millions remplirait
+    // la base de trades sans rien apprendre de plus sur son démarrage.
+    if (!S.etudeMax || (e.ecrits ?? 0) < S.etudeMax) {
+      aEcrire.push(doc)
+      e.ecrits = (e.ecrits ?? 0) + 1
+    }
   } else {
     e.tampon ??= []
     if (e.tampon.length < S.tamponMax) e.tampon.push(doc)
     if (e.temoin || (mcUsd !== null && mcUsd >= S.etudeMc)) {
       e.etude = true
       aEcrire.push(...e.tampon)
+      e.ecrits = e.tampon.length
       e.tampon = []
     }
   }

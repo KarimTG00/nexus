@@ -151,12 +151,17 @@ export const CONFIG_V1 = {
       // (~3,6× la capitalisation de lancement) : les ~5 800 créations
       // quotidiennes gonfleraient la base et la population « surveillés ».
       //
-      // Les TRADES, eux, sont tous conservés : à 3 jours de rétention ils
-      // pèsent ~1 Go, et le groupe témoin devient la totalité des tokens
-      // morts au lieu d'un échantillon. C'est ce qui rend l'étude comparable.
+      // Les TRADES ne sont écrits que pour les tokens de l'étude (passés à
+      // `study_mc`) et pour un témoin de `control_permille` ‰ des créations.
+      // Tout garder (1000 ‰) avait été estimé à ~1 Go sur 3 jours : le volume
+      // réel a rempli 4,5 Go en une journée et arrêté la base. Chaque token
+      // est en outre plafonné à `study_max_trades` trades écrits — les tokens
+      // qui atteignent des millions en produisent des dizaines de milliers,
+      // alors que l'étude porte sur le démarrage.
       persist_mc: 10_000,
       study_mc: 20_000,
-      control_permille: 1000,
+      control_permille: 20,
+      study_max_trades: 3000,
       buffer_max_trades: 5000,
 
       // Mémoire : un token sans trade depuis `idle_minutes` est oublié ; un
