@@ -216,7 +216,9 @@ export async function esperance(cfg, { paliers = null } = {}) {
     const mcAuteurs = sortie
       ? (serie.find(t => t.ts >= sortie.ts)?.mc_usd ?? mcFinal)
       : mcFinal
-    const sommet = Math.max(...serie.map(t => t.mc_usd))
+    // `Math.max(...tableau)` déborde la pile au-delà de quelques dizaines de
+    // milliers d'éléments, et une série de trades les dépasse largement.
+    const sommet = serie.reduce((m, t) => (t.mc_usd > m ? t.mc_usd : m), 0)
 
     // Politique « auteurs » : on sort au signal, sinon au dernier prix connu.
     const rAuteurs = mcAuteurs / mcEntree

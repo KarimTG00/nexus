@@ -44,6 +44,7 @@ export function reglages(cfg) {
     entreeMc: s.entry_mc,
     entreeMaxRatio: s.entry_max_ratio,
     multiples: [...(s.exit_multiples ?? [])].sort((a, b) => a - b),
+    envoyerSorties: Boolean(s.send_exit_alerts),
     auteursMin: s.exit_authors_min,
     nbAuteurs: s.authors_first_buyers,
     microUsd: s.micro_trade_usd,

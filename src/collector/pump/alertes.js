@@ -165,16 +165,26 @@ export async function evaluerEntree(e, { cfg, s, snipers, now = Date.now() }) {
 
   if (decision !== 'alerted') return snapshot
 
+  // Le SENS du mouvement et le SOMMET déjà atteint. Sans eux, une alerte ne
+  // disait ni si le token montait ou retombait, ni s'il avait déjà fait son
+  // mouvement — et sur vingt tokens nommés BEAST, rien ne permettait de
+  // savoir lequel était lequel.
+  const v5 = w['5min'].variation
+  const sens = v5 === null ? 'sens inconnu' : `${v5 >= 0 ? '▲' : '▼'} ${Math.abs(Math.round(v5 * 100))} % sur 5 min`
   const texte = [
     `🎯 *${esc(e.symbol ?? '?')}* — ${esc('pump.fun')} · ${esc(age(ageMin))}`,
-    `Entrée à *${esc(usd(e.mc))}* de MC · ${esc(e.gradue ? 'PumpSwap' : 'courbe')} · liquidité ${esc(usd(e.liquiditeUsd))}`,
+    // Adresse en bloc de code : copiable d'un geste, et seule façon de
+    // distinguer des tokens homonymes. Le base58 ne contient aucun caractère
+    // réservé de MarkdownV2, il n'a pas besoin d'être échappé.
+    '`' + e.mint + '`',
+    '',
+    `MC *${esc(usd(e.mc))}* · ${esc(sens)} · sommet ${esc(usd(e.mcMax))}`,
+    `${esc(e.gradue ? 'PumpSwap' : 'courbe')} · liquidité ${esc(usd(e.liquiditeUsd))}`,
     '',
     `🧪 Trades sous ${esc(usd(s.microUsd))} : *${esc(pct(mesures.micro_share))}* sur ${esc(e.usdConnus)}`,
     `🙋 Acheteurs réels : *${esc(mesures.real_buyers_5m)}* sur 5 min · ${esc(mesures.real_buyers_total)} au total`,
     `👤 ${esc(liste.length)} auteurs${e.partAuteurs === null ? '' : esc(`, ${pct(e.partAuteurs)} de l'offre`)}${e.ventesAuteursAvant ? esc(` (${e.ventesAuteursAvant} déjà vendeurs)`) : ''}`,
-    `Score ${esc(scored.score ?? '—')}/100`,
-    '',
-    `_${esc(`Paliers de sortie : ${(s.multiples ?? []).map(m => 'x' + m).join(', ')} ou ${s.auteursMin} auteurs qui vendent`)}_`
+    `Score ${esc(scored.score ?? '—')}/100`
   ].join('\n')
 
   await envoyer(texte, {
@@ -244,11 +254,18 @@ export async function alerterSortie(e, type, { cfg, s }) {
         esc(vendeurs.slice(0, 5).map(court).join(' · '))
       ]
 
-  await envoyer(lignes.join('\n'), {
-    cfg, tokenId, symbol: e.symbol, kind: seuil, triggerId: snapshot._id,
-    threshold: seuil, score: null, respecterPlafond: false
-  })
-  log.info({ token: tokenId, symbol: e.symbol, type, mc: Math.round(e.mc ?? 0), multiple }, 'sortie signalée')
+  // Toujours ENREGISTRÉE — M10 mesure l'avance du signal sur ces snapshots —
+  // mais envoyée seulement si l'envoi des sorties est activé. Suspendu par
+  // défaut : mêlées aux entrées, elles rendaient le canal impossible à suivre.
+  if (s.envoyerSorties) {
+    const texte = [lignes[0], '`' + e.mint + '`', ...lignes.slice(1)].join('\n')
+    await envoyer(texte, {
+      cfg, tokenId, symbol: e.symbol, kind: seuil, triggerId: snapshot._id,
+      threshold: seuil, score: null, respecterPlafond: false
+    })
+  }
+  log.info({ token: tokenId, symbol: e.symbol, type, mc: Math.round(e.mc ?? 0), multiple, envoyee: s.envoyerSorties },
+    s.envoyerSorties ? 'sortie signalée' : 'sortie enregistrée, envoi suspendu')
   return snapshot
 }
 

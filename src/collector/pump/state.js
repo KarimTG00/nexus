@@ -34,7 +34,7 @@ export function creerEtat({ mint, symbol = null, name = null, uri = null, creato
 
     premiers: [],      // premiers acheteurs DISTINCTS, dans l'ordre : { wallet, ts, rang }
     wallets: new Map(),
-    recents: [],       // fenêtre glissante d'une heure : { ts, wallet, cote, usd }
+    recents: [],       // fenêtre glissante d'une heure : { ts, wallet, cote, usd, mc }
 
     prix: null, mc: null, mcMax: 0, dernierTradeA: null,
     // Liquidité réelle du pool, lue sur les réserves à chaque trade.
@@ -90,7 +90,8 @@ export function appliquerTrade(e, t, { maxPremiers = 20, microUsd = 1, now = Dat
   if (t.liquiditeUsd !== null && t.liquiditeUsd !== undefined && Number.isFinite(t.liquiditeUsd)) {
     e.liquiditeUsd = t.liquiditeUsd
   }
-  if (t.mcUsd !== null && t.mcUsd !== undefined && Number.isFinite(t.mcUsd)) {
+  const mcConnue = t.mcUsd !== null && t.mcUsd !== undefined && Number.isFinite(t.mcUsd)
+  if (mcConnue) {
     e.mc = t.mcUsd
     if (t.mcUsd > e.mcMax) e.mcMax = t.mcUsd
   }
@@ -104,7 +105,10 @@ export function appliquerTrade(e, t, { maxPremiers = 20, microUsd = 1, now = Dat
     e.partAuteurs = partDetenue(e, e.auteursFiges)
   }
 
-  e.recents.push({ ts: t.ts, wallet: t.wallet, cote: t.cote, usd: t.usd ?? null })
+  // La capitalisation de chaque trade est gardée dans la fenêtre : c'est ce
+  // qui permet de dire dans quel SENS le token se déplace au moment d'une
+  // alerte, et pas seulement où il se trouve.
+  e.recents.push({ ts: t.ts, wallet: t.wallet, cote: t.cote, usd: t.usd ?? null, mc: mcConnue ? t.mcUsd : null })
   const limite = now - 60 * MIN
   let i = 0
   while (i < e.recents.length && e.recents[i].ts < limite) i++
@@ -142,7 +146,9 @@ export function partDetenue(e, wallets) {
  * que les filtres et le score existants lisent nos mesures sans adaptation.
  * La différence : ici ce sont des comptes exacts, pas ceux d'un agrégateur.
  *
- * `buyersReels` compte en plus les acheteurs au-dessus du seuil de micro-trade.
+ * En plus : `buyersReels` (acheteurs au-dessus du seuil de micro-trade) et
+ * `mcDebut`, la capitalisation au premier trade de la fenêtre — de quoi dire
+ * si le token monte ou descend.
  */
 export function fenetres(e, now = Date.now(), { microUsd = 1 } = {}) {
   const out = {}
@@ -150,8 +156,10 @@ export function fenetres(e, now = Date.now(), { microUsd = 1 } = {}) {
     const depuis = now - minutes * MIN
     const acheteurs = new Set(), vendeurs = new Set(), traders = new Set(), reels = new Set()
     let buys = 0, sells = 0, vol = 0, volConnu = false
+    let mcDebut = null
     for (const r of e.recents) {
       if (r.ts < depuis) continue
+      if (mcDebut === null && r.mc !== null && r.mc !== undefined) mcDebut = r.mc
       traders.add(r.wallet)
       if (r.cote === 'buy') {
         buys++
@@ -166,7 +174,9 @@ export function fenetres(e, now = Date.now(), { microUsd = 1 } = {}) {
     out[nom] = {
       buyers: acheteurs.size, sellers: vendeurs.size, traders: traders.size,
       buyersReels: reels.size,
-      buys, sells, trades: buys + sells, volumeUsd: volConnu ? vol : null
+      buys, sells, trades: buys + sells, volumeUsd: volConnu ? vol : null,
+      mcDebut,
+      variation: mcDebut && e.mc !== null ? e.mc / mcDebut - 1 : null
     }
   }
   return out
@@ -211,11 +221,6 @@ export function paliersDus(e, multiples = []) {
 }
 
 /**
- * Ce qu'il faut faire maintenant pour ce token.
- * @param s { entreeMc, multiples, auteursMin }
- * @returns liste d'actions : 'entree' | 'x<multiple>' | 'auteurs'
- */
-/**
  * Le token est-il seulement ÉVALUABLE à l'entrée ?
  *
  * Ces conditions ne jugent pas le token : elles vérifient qu'on a de quoi le
@@ -237,13 +242,23 @@ export function peutEvaluerEntree(e, s) {
   // succès — ici elle veut dire « pas encore évaluable ».
   if (e.usdConnus < (s.microMinEchantillon ?? 0)) return false
 
-  // Déjà trop haut : entrer à vingt fois le palier, c'est entrer après le
-  // mouvement — exactement ce que le passage à 50 K devait supprimer.
-  if (s.entreeMaxRatio && e.mc > s.entreeMc * s.entreeMaxRatio) return false
+  // Uniquement une traversée MONTANTE de la bande. On compare le SOMMET déjà
+  // atteint au plafond, pas la capitalisation du moment : un token qui a
+  // dépassé la bande puis y redescend est dans la bande, complet et riche en
+  // trades — et l'entrée partait en pleine chute. Observé en production sur
+  // BEAST : alerte à 115 K pendant l'effondrement d'un token monté à 4,6 M.
+  // Le sommet inclut la capitalisation courante, donc cette condition couvre
+  // aussi le token qui arrive directement au-dessus de la bande.
+  if (s.entreeMaxRatio && e.mcMax > s.entreeMc * s.entreeMaxRatio) return false
 
   return true
 }
 
+/**
+ * Ce qu'il faut faire maintenant pour ce token.
+ * @param s { entreeMc, multiples, auteursMin }
+ * @returns liste d'actions : 'entree' | 'x<multiple>' | 'auteurs'
+ */
 export function decisions(e, s) {
   const out = []
   if (peutEvaluerEntree(e, s)) out.push('entree')

@@ -138,6 +138,12 @@ export const CONFIG_V1 = {
       // vaut ×125, à 2,5 M il vaut ×2.
       exit_multiples: [3, 10, 30],
       exit_authors_min: 2,
+      // Envoi des alertes de SORTIE. Suspendu : elles restent enregistrées
+      // (M10 en a besoin pour mesurer l'avance du signal) mais n'arrivent plus
+      // sur Telegram. Mêlées aux entrées, sur des tokens homonymes, elles
+      // rendaient le canal impossible à suivre, et partaient souvent sur des
+      // tokens déjà retombés à quelques dizaines de dollars.
+      send_exit_alerts: false,
       authors_first_buyers: 10,
       sniper_min_tokens: 5,
 

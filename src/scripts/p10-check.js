@@ -181,6 +181,14 @@ appliquerTrade(tropHaut, trade('B', 'buy', 900, 93_300_000, 1), opts(1))
 verifier(!peutEvaluerEntree(tropHaut, Sc), '93 M pour un palier à 50 K : le mouvement a eu lieu, pas d\'entrée')
 verifier(peutEvaluerEntree(evaluable(), { ...Sc, entreeMaxRatio: null }),
   'plafond de ratio absent : la condition ne s\'applique pas')
+
+// Traversée DESCENDANTE : monté au-dessus de la bande, puis retombé dedans.
+// C'est le cas BEAST observé en production — alerte à 115 K en pleine chute.
+const chute = evaluable()
+appliquerTrade(chute, trade('Z1', 'buy', 900, 4_600_000, 1), opts(1))
+appliquerTrade(chute, trade('Z2', 'sell', 900, 115_000, 2), opts(2))
+verifier(chute.mc === 115_000 && !peutEvaluerEntree(chute, Sc),
+  'monté à 4,6 M puis retombé à 115 K : c\'est une chute, pas une entrée')
 e.entreeEvaluee = true
 verifier(decisions(e, S).length === 0, 'l\'entrée n\'est évaluée qu\'une fois')
 
@@ -221,6 +229,8 @@ verifier(decisions(e, S).length === 0, 'chaque palier n\'est signalé qu\'une fo
 const w = fenetres(e, t0 + 13 * 60_000)
 verifier(w['5min'].trades === 5 && w['5min'].sells === 3 && w['5min'].buyers === 2 && w['1h'].trades === e.n,
   `fenêtres glissantes (5 min : ${w['5min'].trades} trades dont ${w['5min'].sells} ventes, 1 h : ${w['1h'].trades})`)
+verifier(w['5min'].mcDebut === 400_000 && Math.abs(w['5min'].variation - (530_000 / 400_000 - 1)) < 1e-9,
+  `sens du mouvement sur 5 min : de 400 K à 530 K, soit +${Math.round(w['5min'].variation * 100)} %`)
 
 appliquerTrade(e, trade('K', 'buy', 500, 2_000_000, 14), opts(14))
 verifier(JSON.stringify(decisions(e, S)) === '["x30"]', `×${multipleAtteint(e).toFixed(0)} : palier ×30`)
@@ -354,6 +364,8 @@ verifier(reglages({}).mesureSeule.includes('top_holders') && reglages({}).exclus
   'par défaut : tout est mesuré, rien n\'est exclu')
 verifier(reglages({}).endpoints.length >= 2 && reglages({}).multiples.length >= 2,
   'deux points d\'accès et des paliers échelonnés par défaut')
+verifier(reglages({}).envoyerSorties === false,
+  'alertes de sortie enregistrées mais non envoyées par défaut')
 
 console.log(`\n${ok} vérifications passées, ${ko} en échec`)
 process.exit(ko ? 1 : 0)
