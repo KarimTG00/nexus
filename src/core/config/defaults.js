@@ -123,6 +123,16 @@ export const CONFIG_V1 = {
       // parce que leur suivi interroge Mobula pour chaque snapshot.
       measure_mc: [10_000, 15_000, 20_000, 30_000],
 
+      // Bougies d'une minute de capitalisation (ouverture, plus haut, plus bas,
+      // clôture, volume, achats, ventes) pour chaque token passé à
+      // `candles_from_mc`, pendant `candles_hours`. C'est la trajectoire qui
+      // permet de rejouer une sortie — stop suiveur, paliers, sortie au temps —
+      // que le seul sommet ne dit pas. ~20 Mo par jour en time series, contre
+      // ~2,5 Go pour les trades bruts.
+      candles_from_mc: 10_000,
+      candles_hours: 4,
+      candle_seconds: 60,
+
       // Activité fabriquée : part des trades sous `micro_trade_usd`. En deçà
       // de `micro_min_sample` trades mesurés, le filtre s'abstient.
       micro_trade_usd: 1,
@@ -147,7 +157,12 @@ export const CONFIG_V1 = {
       // du seuil, donc de la possibilité d'apprendre. Un filtre en mesure
       // seule garde sa valeur dans le snapshot et reste balayable par M5 ;
       // un filtre exclu ne laisse aucune trace.
-      measure_only_filters: ['flat_velocity', 'wash_trading', 'low_score',
+      //
+      // `micro_trades` y est passé à son tour : 217 entrées sur 217 rejetées
+      // en 12 h, part de micro-trades médiane à 11 % et jamais au-dessus de
+      // 57 % pour un seuil à 70 %. Les montées organiques ont de vrais
+      // acheteurs, et ce signal ne séparait pas les gagnants (AUC 0,37).
+      measure_only_filters: ['micro_trades', 'flat_velocity', 'wash_trading', 'low_score',
         'sell_pressure', 'top_holders', 'lp_not_secured', 'mc_too_high'],
       excluded_filters: [],
 

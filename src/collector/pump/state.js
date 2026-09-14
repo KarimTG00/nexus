@@ -61,7 +61,13 @@ export function creerEtat({ mint, symbol = null, name = null, uri = null, creato
     graduation: null,          // { mcCourbe, mcAmm }
 
     // Seuils de mesure déjà jugés (retenus ou écartés) : chacun une seule fois.
-    croisements: new Set()
+    croisements: new Set(),
+
+    // Bougies : celle en cours, celles fermées pas encore écrites, et l'instant
+    // (chaîne) de la première — la fenêtre d'enregistrement part de là.
+    bougie: null,
+    bougiesFermees: [],
+    bougiesDepuis: null
   }
 }
 
@@ -416,6 +422,46 @@ export function decisions(e, s) {
     if (!e.alertes.auteurs && e.complet && e.ventesAuteurs.size >= s.auteursMin) out.push('auteurs')
   }
   return out
+}
+
+/**
+ * Bougie de capitalisation, découpée sur l'heure de la CHAÎNE du trade et non
+ * sur l'heure de réception : deux points d'accès livrent le même trade à
+ * quelques centaines de millisecondes d'écart. Un trade antérieur à la bougie
+ * ouverte (reprise après coupure) est ignoré : réécrire une bougie fermée
+ * fausserait son ouverture et sa clôture.
+ * @returns {boolean} vrai si le trade a été compté
+ */
+export function majBougie(e, t, { dureeMs = 60_000 } = {}) {
+  if (!Number.isFinite(t.mcUsd)) return false
+  const debut = Math.floor(t.ts / dureeMs) * dureeMs
+  let b = e.bougie
+  if (b && debut < b.debut) return false
+  if (b && debut > b.debut) { fermerBougie(e); b = null }
+  if (!b) {
+    b = e.bougie = { debut, o: t.mcUsd, h: t.mcUsd, l: t.mcUsd, c: t.mcUsd,
+      volumeUsd: 0, achats: 0, ventes: 0, acheteurs: new Set(), liquiditeUsd: null, venue: t.venue ?? null }
+  }
+  if (t.mcUsd > b.h) b.h = t.mcUsd
+  if (t.mcUsd < b.l) b.l = t.mcUsd
+  b.c = t.mcUsd
+  if (Number.isFinite(t.usd)) b.volumeUsd += t.usd
+  if (t.cote === 'buy') { b.achats++; b.acheteurs.add(t.wallet) } else b.ventes++
+  if (Number.isFinite(t.liquiditeUsd)) b.liquiditeUsd = t.liquiditeUsd
+  if (t.venue) b.venue = t.venue
+  return true
+}
+
+/** Ferme la bougie ouverte et la range parmi celles à écrire. */
+export function fermerBougie(e) {
+  const b = e.bougie
+  if (!b) return
+  e.bougiesFermees.push({
+    debut: b.debut, o: b.o, h: b.h, l: b.l, c: b.c,
+    volumeUsd: Math.round(b.volumeUsd), achats: b.achats, ventes: b.ventes, acheteurs: b.acheteurs.size,
+    liquiditeUsd: b.liquiditeUsd === null ? null : Math.round(b.liquiditeUsd), venue: b.venue
+  })
+  e.bougie = null
 }
 
 /**

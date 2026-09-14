@@ -29,7 +29,7 @@ import { CONFIG_V1 } from '../../core/config/defaults.js'
 import { fournisseur } from '../../adapters/rpc/providers.js'
 import { PUMP, PUMPSWAP, WSOL, evenementsDesLogs, normaliser, decoderPool } from './decode.js'
 import { creerEtat, appliquerTrade, decisions, paliersDus, Snipers,
-  marquerGraduation, croisementsDus, signauxCroisement } from './state.js'
+  marquerGraduation, croisementsDus, signauxCroisement, majBougie, fermerBougie } from './state.js'
 import { evaluerEntree, alerterSortie } from './alertes.js'
 import * as live from '../../repos/live.js'
 
@@ -48,6 +48,9 @@ export function reglages(cfg) {
     organiqueSeul: Boolean(s.organic_only),
     ageOrganiqueMs: (s.organic_min_age_seconds ?? 0) * 1000,
     usineMaxMs: (s.factory_max_seconds ?? 2) * 1000,
+    bougiesMc: s.candles_from_mc,
+    bougiesMs: (s.candles_hours ?? 4) * 3_600_000,
+    bougieDureeMs: (s.candle_seconds ?? 60) * 1000,
     multiples: [...(s.exit_multiples ?? [])].sort((a, b) => a - b),
     envoyerSorties: Boolean(s.send_exit_alerts),
     auteursMin: s.exit_authors_min,
@@ -84,6 +87,7 @@ const vues = new Map()         // signature → instant de réception
 const aResoudre = new Set()    // pools à relier à leur mint
 const poolsIllisibles = new Set()
 const aEcrire = []             // trades de l'étude, en attente d'écriture
+const bougiesAEcrire = []      // bougies fermées, en attente d'écriture
 const connexions = []
 const minuteurs = []
 
@@ -99,7 +103,7 @@ const stats = {
   messages: 0, doublons: 0, echecs: 0, evenements: 0, trades: 0, creations: 0,
   graduations: 0, sansCours: 0, poolsResolus: 0, poolsEnEchec: 0,
   entrees: 0, sorties: 0, tradesEcrits: 0, persistes: 0, archives: 0,
-  croisements: 0, croisementsEcartes: 0
+  croisements: 0, croisementsEcartes: 0, bougiesEcrites: 0
 }
 
 // --- connexions ------------------------------------------------------------------
@@ -349,6 +353,19 @@ function surTrade(n, sig, i, now) {
     }
   }
 
+  // --- bougies : la trajectoire de chaque token passé à `candles_from_mc` ------
+  if (S.bougiesMc && mcUsd !== null) {
+    if (e.bougiesDepuis === null && mcUsd >= S.bougiesMc) e.bougiesDepuis = n.ts
+    if (e.bougiesDepuis !== null) {
+      if (n.ts - e.bougiesDepuis <= S.bougiesMs) {
+        majBougie(e, { ts: n.ts, mcUsd, usd, cote: n.cote, wallet: n.wallet, liquiditeUsd, venue: n.venue },
+          { dureeMs: S.bougieDureeMs })
+      } else {
+        fermerBougie(e)
+      }
+    }
+  }
+
   // --- visibilité : écrit en base dès qu'il montre de la vie -------------------
   if (!e.persiste && mcUsd !== null && mcUsd >= S.persistMc) {
     e.persiste = true
@@ -411,12 +428,32 @@ function enregistrerCroisement(e, seuil, now) {
     .catch(err => log.warn({ mint: e.mint, seuil, err: err.message }, 'croisement non enregistré'))
 }
 
+/**
+ * Range les bougies fermées d'un token dans la file d'écriture. Une bougie
+ * ouverte depuis plus de deux durées est close d'office : sans nouveau trade,
+ * elle ne se fermerait jamais.
+ */
+function recolterBougies(e, now, { tout = false } = {}) {
+  if (e.bougie && (tout || now - e.bougie.debut >= 2 * S.bougieDureeMs)) fermerBougie(e)
+  if (!e.bougiesFermees.length) return
+  const id = live.idToken(e.mint)
+  for (const b of e.bougiesFermees.splice(0)) bougiesAEcrire.push(live.docBougie(id, b))
+}
+
 // --- tâches périodiques ----------------------------------------------------------
 
 async function ecrire() {
   if (ecritureEnCours) return
   ecritureEnCours = true
   try {
+    const maintenant = Date.now()
+    for (const e of etats.values()) recolterBougies(e, maintenant)
+    if (bougiesAEcrire.length) {
+      const lot = bougiesAEcrire.splice(0, bougiesAEcrire.length)
+      try { stats.bougiesEcrites += await live.ajouterBougies(lot) } catch (err) {
+        log.warn({ err: err.message, lot: lot.length }, 'bougies non écrites')
+      }
+    }
     if (aEcrire.length) {
       const lot = aEcrire.splice(0, aEcrire.length)
       try { stats.tradesEcrits += await live.ajouterTrades(lot) } catch (e) {
@@ -529,6 +566,7 @@ function elaguer(now) {
     const alerte = e.alertes.entree?.decision === 'alerted'
     const limite = alerte ? S.suiviHeures * 3_600_000 : S.inactifMin * 60_000
     if (now - dernier <= limite) continue
+    recolterBougies(e, now, { tout: true })
     etats.delete(mint)
     noterCreateur(e.creator, -1)
     // Seuls les tokens jamais évalués sont archivés : un rejet garde son
@@ -570,6 +608,7 @@ function etatDepuisDoc(d) {
   e.usine = l.factory ?? null
   e.graduation = l.graduation ? { mcCourbe: l.graduation.mc_curve ?? null, mcAmm: l.graduation.mc_amm ?? null } : null
   e.mcMaxA = l.mc_max_at ? +l.mc_max_at : null
+  e.bougiesDepuis = l.candles_since ? +l.candles_since : null
   e.premiereMoitie = l.first_halving
     ? { ts: +l.first_halving.at, sommet: l.first_halving.peak, sommetA: l.first_halving.peak_at ? +l.first_halving.peak_at : null }
     : null
@@ -619,6 +658,7 @@ export async function demarrerFlux(cfg) {
   snipers = new Snipers({ seuil: S.snipersSeuil })
 
   await live.assurerIndex()
+  await live.assurerSeries()
   for (const [pool, info] of await live.chargerPools()) pools.set(pool, info)
   for (const d of await live.chargerSuivis(new Date(Date.now() - S.suiviHeures * 3_600_000))) {
     const e = etatDepuisDoc(d)
@@ -668,6 +708,7 @@ export async function arreterFlux() {
   connexions.length = 0
   for (const m of minuteurs) clearInterval(m)
   minuteurs.length = 0
+  for (const e of etats.values()) recolterBougies(e, Date.now(), { tout: true })
   await ecrire().catch(() => { /* dernière tentative */ })
 }
 

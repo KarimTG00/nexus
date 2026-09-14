@@ -12,7 +12,7 @@
  * écrivent le même champ se contredisent sans que personne ne le voie.
  */
 
-import { col } from '../core/db/client.js'
+import { col, getDb } from '../core/db/client.js'
 import { SCHEMA_VERSION, collections } from '../core/db/schema.js'
 import { normSymbol } from './tokens.js'
 import { partMicro } from '../collector/pump/state.js'
@@ -91,6 +91,7 @@ export function docLive(e) {
     curve_seconds: e.gradueA && e.createdAt ? Math.round((e.gradueA - e.createdAt) / 1000) : null,
     graduation: e.graduation ? { mc_curve: e.graduation.mcCourbe, mc_amm: e.graduation.mcAmm } : null,
     mc_max_at: e.mcMaxA ? new Date(e.mcMaxA) : null,
+    candles_since: e.bougiesDepuis ? new Date(e.bougiesDepuis) : null,
     first_halving: e.premiereMoitie ? {
       at: new Date(e.premiereMoitie.ts),
       peak: e.premiereMoitie.sommet,
@@ -213,6 +214,46 @@ export async function ajouterTrades(docs) {
     if (e.code === 11000 || e.writeErrors?.every?.(w => w.code === 11000)) return e.insertedCount ?? 0
     throw e
   }
+}
+
+/**
+ * Collections time series du flux, créées si absentes. Une insertion dans une
+ * collection inexistante en créerait une ORDINAIRE — sans compression ni
+ * expiration — et une collection ne se convertit pas après coup.
+ */
+export async function assurerSeries() {
+  const db = getDb()
+  const existantes = new Set((await db.listCollections({}, { nameOnly: true }).toArray()).map(c => c.name))
+  for (const c of collections.filter(x => x.timeseries && x.name.startsWith('stream_'))) {
+    if (existantes.has(c.name)) continue
+    try {
+      await db.createCollection(c.name, { timeseries: c.timeseries, expireAfterSeconds: c.expireAfterSeconds })
+      log.info({ collection: c.name }, 'collection time series créée')
+    } catch (e) {
+      if (e.code !== 48) throw e     // déjà créée entre-temps
+    }
+  }
+}
+
+/** Document d'une bougie fermée, au format time series. */
+export function docBougie(tokenId, b) {
+  return {
+    ts: new Date(b.debut),
+    meta: { token: tokenId },
+    o: b.o, h: b.h, l: b.l, c: b.c,
+    volume_usd: b.volumeUsd,
+    buys: b.achats,
+    sells: b.ventes,
+    buyers: b.acheteurs,
+    liquidity_usd: b.liquiditeUsd,
+    venue: b.venue
+  }
+}
+
+export async function ajouterBougies(docs) {
+  if (!docs.length) return 0
+  const r = await col('stream_candles').insertMany(docs, { ordered: false })
+  return r.insertedCount
 }
 
 /** Croisement mesuré d'un seuil. Un doublon (redémarrage) n'est pas une erreur. */

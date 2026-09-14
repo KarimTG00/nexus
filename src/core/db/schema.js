@@ -218,6 +218,17 @@ export const collections = [
   },
 
   {
+    // Bougies d'une minute de capitalisation, pour chaque token du flux passé
+    // à `candles_from_mc`. La trajectoire après chaque seuil : ce qui permet de
+    // rejouer une sortie (stop suiveur, paliers, sortie au temps), que le seul
+    // sommet ne dit pas. Time series : compressée, index méta + temps
+    // automatique. Conservées 30 jours.
+    name: 'stream_candles',
+    timeseries: { timeField: 'ts', metaField: 'meta', granularity: 'minutes' },
+    expireAfterSeconds: 30 * DAY
+  },
+
+  {
     // Montées organiques franchissant un seuil MESURÉ (10 K, 15 K…), avec
     // leurs signaux au croisement. Ni filtre, ni alerte, ni outcome : c'est la
     // matière dont M10 tire le seuil d'entrée et ses filtres. Sans expiration,

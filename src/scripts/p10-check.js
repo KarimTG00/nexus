@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs'
 import { decoderEvenement, normaliser, evenementsDesLogs } from '../collector/pump/decode.js'
 import { creerEtat, appliquerTrade, partMicro, partDetenue, fenetres, auteurs, figerAuteurs,
   decisions, peutEvaluerEntree, paliersDus, multipleAtteint, Snipers,
-  marquerGraduation, croisementsDus, signauxCroisement } from '../collector/pump/state.js'
+  marquerGraduation, croisementsDus, signauxCroisement, majBougie, fermerBougie } from '../collector/pump/state.js'
 import microTrades from '../pipeline/filters/stream/micro_trades.js'
 import realBuyers from '../pipeline/filters/stream/real_buyers.js'
 import { filtersFor, runFilters } from '../pipeline/filters/index.js'
@@ -435,6 +435,32 @@ const rg = reglages({})
 verifier(rg.entreeMc === 20_000 && rg.organiqueSeul === true && rg.ageOrganiqueMs === 2000 && rg.usineMaxMs === 2000
   && JSON.stringify(rg.mesureMc) === '[10000,15000,20000,30000]',
   'par défaut : entrée organique à 20 K, seuils mesurés 10 K à 30 K')
+
+// --- 7. bougies ---------------------------------------------------------------------------------
+
+console.log('\n7. Bougies')
+const bg = creerEtat({ mint: 'K', vuA: t0 })
+const tb = (s, mc, cote = 'buy', usd = 10, wallet = 'A') => ({ ts: t0 + s * 1000, mcUsd: mc, usd, cote, wallet, venue: 'courbe' })
+majBougie(bg, tb(1, 10_000))
+majBougie(bg, tb(20, 14_000, 'buy', 5, 'B'))
+majBougie(bg, tb(40, 9_000, 'sell', 3))
+majBougie(bg, tb(59, 12_000, 'buy', 2, 'B'))
+verifier(bg.bougie.o === 10_000 && bg.bougie.h === 14_000 && bg.bougie.l === 9_000 && bg.bougie.c === 12_000
+  && bg.bougiesFermees.length === 0, 'une minute : ouverture, plus haut, plus bas, clôture')
+majBougie(bg, tb(61, 13_000))
+const b1 = bg.bougiesFermees[0]
+verifier(bg.bougiesFermees.length === 1 && b1.debut === t0 && b1.volumeUsd === 20 && b1.achats === 3 && b1.ventes === 1 && b1.acheteurs === 2,
+  'minute suivante : la précédente est fermée avec son volume, ses achats, ventes et acheteurs distincts')
+verifier(!majBougie(bg, tb(30, 50_000)) && bg.bougie.h === 13_000, 'trade en retard sur une bougie fermée : ignoré')
+verifier(!majBougie(bg, tb(62, null)), 'trade sans capitalisation : aucune bougie')
+fermerBougie(bg)
+verifier(bg.bougie === null && bg.bougiesFermees.length === 2 && bg.bougiesFermees[1].o === 13_000,
+  'fermeture forcée : la bougie ouverte rejoint celles à écrire')
+
+const rb2 = reglages({})
+verifier(rb2.bougiesMc === 10_000 && rb2.bougiesMs === 4 * 3_600_000 && rb2.bougieDureeMs === 60_000
+  && rb2.mesureSeule.includes('micro_trades'),
+  'par défaut : bougies d\'une minute dès 10 K pendant 4 h, micro_trades en mesure seule')
 
 console.log(`\n${ok} vérifications passées, ${ko} en échec`)
 process.exit(ko ? 1 : 0)
