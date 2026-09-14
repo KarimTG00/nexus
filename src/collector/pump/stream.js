@@ -335,7 +335,13 @@ function surTrade(n, sig, i, now) {
     side: n.cote, venue: n.venue, tokens: n.tokens, quote_amount: n.montant, quote: n.quote,
     usd, price_usd: prixUsd, mc_usd: mcUsd, rank: e.n
   }
-  if (e.etude) {
+  if (e.usine) {
+    // Usine : ses trades ne s'écrivent pas. Mesuré sur 24 h, ils faisaient
+    // 66 % du volume écrit (2 650 par token), alors que l'observation de
+    // l'usine n'en a pas besoin — les bougies et `live` portent le saut, le
+    // sommet et la chute.
+    e.tampon = []
+  } else if (e.etude) {
     // Plafond par token : au-delà, un token à plusieurs millions remplirait
     // la base de trades sans rien apprendre de plus sur son démarrage.
     if (!S.etudeMax || (e.ecrits ?? 0) < S.etudeMax) {
@@ -629,6 +635,10 @@ function etatDepuisDoc(d) {
   e.entreeEvaluee = Boolean(a.entry)
   e.persiste = true
   e.etude = Boolean(l.study)
+  // Trades déjà écrits : sans ce compte, chaque redémarrage rouvrait le
+  // plafond — mesuré, 102 000 trades en trop sur 24 h. Un token d'étude
+  // enregistré avant ce champ est tenu pour plein plutôt que réécrit.
+  e.ecrits = l.trades_written ?? (e.etude ? S.etudeMax : 0)
   e.temoin = Boolean(l.control)
   e.dernierTradeA = l.updated_at ? +l.updated_at : null
   return e

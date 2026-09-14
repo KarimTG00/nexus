@@ -108,6 +108,7 @@ export function docLive(e) {
       multiples: (e.alertes.multiples ?? []).map(m => ({ ...m, at: new Date(m.at) })),
       authors: e.alertes.auteurs ? { ...e.alertes.auteurs, at: new Date(e.alertes.auteurs.at) } : null
     },
+    trades_written: e.ecrits ?? 0,
     study: Boolean(e.etude),
     control: Boolean(e.temoin),
     updated_at: new Date()
