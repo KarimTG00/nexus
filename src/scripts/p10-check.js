@@ -477,5 +477,37 @@ verifier(rb2.bougiesMc === 10_000 && rb2.bougiesMs === 4 * 3_600_000 && rb2.boug
   && rb2.mesureSeule.includes('micro_trades'),
   'par défaut : bougies d\'une minute pendant 4 h et de 10 s pendant 30 min dès 10 K, micro_trades en mesure seule')
 
+// --- 8. wallets alpha -----------------------------------------------------------------------
+
+console.log('\n8. Wallets alpha')
+const { resumerTransaction } = await import('../collector/pump/alpha.js')
+const WA = 'A1phaWa11etAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+const WN = 'NewWa11etBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'
+const txA = {
+  meta: {
+    err: null, fee: 5000,
+    preBalances: [5e9, 0, 1], postBalances: [3.99e9, 1e9, 1],
+    innerInstructions: [{ instructions: [
+      { program: 'system', parsed: { type: 'transfer', info: { source: WA, destination: 'TIPTIP', lamports: 1e7 } } }
+    ] }],
+    preTokenBalances: [{ owner: WA, mint: 'MINT1', uiTokenAmount: { uiAmount: 1000 } }],
+    postTokenBalances: []
+  },
+  transaction: { message: {
+    accountKeys: [{ pubkey: WA }, { pubkey: WN }, { pubkey: '11111111111111111111111111111111' }],
+    instructions: [{ program: 'system', programId: '11111111111111111111111111111111',
+      parsed: { type: 'transfer', info: { source: WA, destination: WN, lamports: 1e9 } } }]
+  } }
+}
+const ra = resumerTransaction(txA, WA)
+verifier(ra.sol_delta === -1.01 && ra.sol_apres === 3.99 && ra.frais_sol === 0.000005,
+  `variation de SOL du wallet lue sur ses soldes (${ra.sol_delta} SOL)`)
+verifier(ra.virements.length === 2 && ra.virements[0].vers === WN && ra.virements[0].sol === 1 && ra.virements[1].sol === 0.01,
+  'virements système, instructions internes comprises : le wallet armé et le pourboire')
+verifier(ra.tokens.length === 1 && ra.tokens[0].mint === 'MINT1' && ra.tokens[0].delta === -1000,
+  'compte de token fermé dans la transaction : tout le solde est sorti')
+verifier(ra.programmes.length === 1 && resumerTransaction({ meta: null }, WA) === null,
+  'programmes appelés relevés ; transaction illisible : aucun résumé inventé')
+
 console.log(`\n${ok} vérifications passées, ${ko} en échec`)
 process.exit(ko ? 1 : 0)

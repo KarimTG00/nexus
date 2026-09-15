@@ -29,7 +29,8 @@ export const idToken = mint => `solana:${mint}`
  * s'effacerait jamais.
  */
 export async function assurerIndex() {
-  for (const c of collections.filter(x => ['trades', 'pump_pools', 'stream_gaps', 'stream_crossings'].includes(x.name))) {
+  for (const c of collections.filter(x => ['trades', 'pump_pools', 'stream_gaps', 'stream_crossings',
+    'wallet_alpha', 'wallet_alpha_activity', 'wallet_alpha_trades'].includes(x.name))) {
     for (const { key, ...options } of c.indexes ?? []) {
       try {
         await col(c.name).createIndex(key, options)
@@ -109,6 +110,8 @@ export function docLive(e) {
       authors: e.alertes.auteurs ? { ...e.alertes.auteurs, at: new Date(e.alertes.auteurs.at) } : null
     },
     trades_written: e.ecrits ?? 0,
+    // Tradé par au moins un wallet alpha : trajectoire gardée en entier.
+    alpha: Boolean(e.alpha),
     study: Boolean(e.etude),
     control: Boolean(e.temoin),
     updated_at: new Date()
@@ -286,6 +289,18 @@ export async function historiqueCreateur(creator, sauf, avant) {
     usine: docs.filter(d => d.live?.factory).length,
     au_dessus_100k: docs.filter(d => (d.live?.mc_max ?? 0) >= 100_000).length,
     sommet_max: docs.reduce((m, d) => Math.max(m, d.live?.mc_max ?? 0), 0)
+  }
+}
+
+/** Trades des wallets alpha. Un doublon (reconnexion, redémarrage) n'est pas une erreur. */
+export async function ajouterTradesAlpha(docs) {
+  if (!docs.length) return 0
+  try {
+    const r = await col('wallet_alpha_trades').insertMany(docs, { ordered: false })
+    return r.insertedCount
+  } catch (e) {
+    if (e.code === 11000 || e.writeErrors?.every?.(w => w.code === 11000)) return e.insertedCount ?? 0
+    throw e
   }
 }
 

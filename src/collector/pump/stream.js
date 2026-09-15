@@ -32,6 +32,7 @@ import { creerEtat, appliquerTrade, decisions, paliersDus, Snipers,
   marquerGraduation, croisementsDus, signauxCroisement, majBougie, fermerBougie } from './state.js'
 import { evaluerEntree, alerterSortie } from './alertes.js'
 import * as live from '../../repos/live.js'
+import * as alpha from './alpha.js'
 
 const log = mod('collector:pump')
 
@@ -89,6 +90,7 @@ const vues = new Map()         // signature → instant de réception
 const aResoudre = new Set()    // pools à relier à leur mint
 const poolsIllisibles = new Set()
 const aEcrire = []             // trades de l'étude, en attente d'écriture
+const alphaAEcrire = []        // trades des wallets alpha, en attente d'écriture
 // Bougies fermées en attente d'écriture, par série, et la collection de chacune.
 const SERIES = { m1: 'stream_candles', s10: 'stream_candles_10s' }
 const bougiesAEcrire = { m1: [], s10: [] }
@@ -339,7 +341,18 @@ function surTrade(n, sig, i, now) {
     side: n.cote, venue: n.venue, tokens: n.tokens, quote_amount: n.montant, quote: n.quote,
     usd, price_usd: prixUsd, mc_usd: mcUsd, rank: e.n
   }
-  if (e.usine) {
+  // --- wallets alpha : chaque trade gardé, et le token suivi en entier ---------
+  // Le token passe à l'étude dès leur premier trade, même sous `study_mc` :
+  // juger leurs sorties suppose la trajectoire complète du token.
+  if (alpha.estAlpha(n.wallet)) {
+    e.alpha = true
+    e.temoin = true
+    stats.tradesAlpha = (stats.tradesAlpha ?? 0) + 1
+    alphaAEcrire.push({ ...doc, symbol: e.symbol, complet: e.complet,
+      age_token_s: e.createdAt ? Math.round((n.ts - e.createdAt) / 1000) : null })
+  }
+
+  if (e.usine && !e.alpha) {
     // Usine : ses trades ne s'écrivent pas. Mesuré sur 24 h, ils faisaient
     // 66 % du volume écrit (2 650 par token), alors que l'observation de
     // l'usine n'en a pas besoin — les bougies et `live` portent le saut, le
@@ -365,7 +378,7 @@ function surTrade(n, sig, i, now) {
 
   // --- bougies : la trajectoire de chaque token passé à `candles_from_mc` ------
   if (S.bougiesMc && mcUsd !== null) {
-    if (e.bougiesDepuis === null && mcUsd >= S.bougiesMc) e.bougiesDepuis = n.ts
+    if (e.bougiesDepuis === null && (mcUsd >= S.bougiesMc || e.alpha)) e.bougiesDepuis = n.ts
     if (e.bougiesDepuis !== null) {
       const depuis = n.ts - e.bougiesDepuis
       const t = { ts: n.ts, mcUsd, usd, cote: n.cote, wallet: n.wallet, liquiditeUsd, venue: n.venue }
@@ -379,7 +392,7 @@ function surTrade(n, sig, i, now) {
   }
 
   // --- visibilité : écrit en base dès qu'il montre de la vie -------------------
-  if (!e.persiste && mcUsd !== null && mcUsd >= S.persistMc) {
+  if (!e.persiste && mcUsd !== null && (mcUsd >= S.persistMc || e.alpha)) {
     e.persiste = true
     live.persisterToken(e, { configVersion: cfgCourante._id })
       .then(nouveau => { if (nouveau) stats.persistes++ })
@@ -468,6 +481,12 @@ async function ecrire() {
       const lot = file.splice(0, file.length)
       try { stats.bougiesEcrites += await live.ajouterBougies(lot, SERIES[serie]) } catch (err) {
         log.warn({ err: err.message, serie, lot: lot.length }, 'bougies non écrites')
+      }
+    }
+    if (alphaAEcrire.length) {
+      const lot = alphaAEcrire.splice(0, alphaAEcrire.length)
+      try { await live.ajouterTradesAlpha(lot) } catch (err) {
+        log.warn({ err: err.message, lot: lot.length }, 'trades alpha non écrits')
       }
     }
     if (aEcrire.length) {
@@ -645,6 +664,7 @@ function etatDepuisDoc(d) {
   e.entreeEvaluee = Boolean(a.entry)
   e.persiste = true
   e.etude = Boolean(l.study)
+  e.alpha = Boolean(l.alpha)
   // Trades déjà écrits : sans ce compte, chaque redémarrage rouvrait le
   // plafond — mesuré, 102 000 trades en trop sur 24 h. Un token d'étude
   // enregistré avant ce champ est tenu pour plein plutôt que réécrit.
@@ -664,6 +684,7 @@ function journal() {
   log.info({
     ...stats, suivis: etats.size, en_etude: enEtude, en_base: persistes, gradues_suivis: gradues,
     pools: pools.size, pools_en_attente: aResoudre.size, snipers: snipers.taille,
+    alpha: alpha.statsAlpha,
     sol_usd: solUsd, cours_age_s: solUsdA ? Math.round((Date.now() - solUsdA) / 1000) : null,
     connexions: connexions.map(c => ({ source: c.nom, messages: c.stats.messages, reconnexions: c.stats.reconnexions }))
   }, 'flux pump.fun')
@@ -679,6 +700,8 @@ export async function demarrerFlux(cfg) {
 
   await live.assurerIndex()
   await live.assurerSeries()
+  await alpha.demarrerAlpha({ rpcHttp })
+    .catch(err => log.warn({ err: err.message }, 'surveillance alpha non démarrée'))
   for (const [pool, info] of await live.chargerPools()) pools.set(pool, info)
   for (const d of await live.chargerSuivis(new Date(Date.now() - S.suiviHeures * 3_600_000))) {
     const e = etatDepuisDoc(d)
@@ -724,6 +747,7 @@ export function actualiserConfig(cfg) {
 }
 
 export async function arreterFlux() {
+  alpha.arreterAlpha()
   for (const c of connexions) c.fermer()
   connexions.length = 0
   for (const m of minuteurs) clearInterval(m)

@@ -251,6 +251,36 @@ export const collections = [
     ]
   },
 
+  {
+    // Wallets ALPHA, surveillés jusqu'à `watch_until` pour vérifier s'ils
+    // gagnent vraiment et s'ils changent de wallet pour agir. `role` :
+    //   surveille  relevé en continu
+    //   candidat   a reçu au moins 0,5 SOL d'un wallet surveillé
+    //   financeur  en a envoyé au moins autant à un wallet surveillé
+    name: 'wallet_alpha',
+    indexes: [{ key: { role: 1, watch_until: 1 }, name: 'ix_role' }]
+  },
+
+  {
+    // Toutes les transactions des wallets surveillés, résumées : SOL,
+    // virements, tokens, programmes. Sans expiration : c'est la trace de
+    // leur comportement, et elle reste petite.
+    name: 'wallet_alpha_activity',
+    indexes: [
+      { key: { wallet: 1, ts: -1 },      name: 'ix_wallet_ts' },
+      { key: { 'virements.vers': 1 },    name: 'ix_virements' }
+    ]
+  },
+
+  {
+    // Leurs trades pump.fun vus par le flux, à la seconde, sans expiration.
+    name: 'wallet_alpha_trades',
+    indexes: [
+      { key: { wallet: 1, ts: 1 }, name: 'ix_wallet_ts' },
+      { key: { token: 1, ts: 1 },  name: 'ix_token_ts' }
+    ]
+  },
+
   // --- collections analytiques : pré-calculées pour le dashboard ------------
   ...['funnel', 'filter_perf', 'wallets', 'deployers',
       'blindspots', 'discovery', 'regime', 'proposals', 'succes', 'strategie'].map(n => ({
