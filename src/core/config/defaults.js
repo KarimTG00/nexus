@@ -132,6 +132,11 @@ export const CONFIG_V1 = {
       candles_from_mc: 10_000,
       candles_hours: 4,
       candle_seconds: 60,
+      // Plus fines sur les premières minutes : sur 377 alertes, le ×2 et le
+      // stop tombaient souvent dans la même minute, et l'hypothèse prudente
+      // (le stop d'abord) décidait seule du résultat simulé.
+      candle_fine_seconds: 10,
+      candles_fine_minutes: 30,
 
       // Activité fabriquée : part des trades sous `micro_trade_usd`. En deçà
       // de `micro_min_sample` trades mesurés, le filtre s'abstient.

@@ -51,6 +51,8 @@ export function reglages(cfg) {
     bougiesMc: s.candles_from_mc,
     bougiesMs: (s.candles_hours ?? 4) * 3_600_000,
     bougieDureeMs: (s.candle_seconds ?? 60) * 1000,
+    bougiesFinesMs: (s.candles_fine_minutes ?? 0) * 60_000,
+    bougieFineDureeMs: (s.candle_fine_seconds ?? 10) * 1000,
     multiples: [...(s.exit_multiples ?? [])].sort((a, b) => a - b),
     envoyerSorties: Boolean(s.send_exit_alerts),
     auteursMin: s.exit_authors_min,
@@ -87,7 +89,9 @@ const vues = new Map()         // signature → instant de réception
 const aResoudre = new Set()    // pools à relier à leur mint
 const poolsIllisibles = new Set()
 const aEcrire = []             // trades de l'étude, en attente d'écriture
-const bougiesAEcrire = []      // bougies fermées, en attente d'écriture
+// Bougies fermées en attente d'écriture, par série, et la collection de chacune.
+const SERIES = { m1: 'stream_candles', s10: 'stream_candles_10s' }
+const bougiesAEcrire = { m1: [], s10: [] }
 const connexions = []
 const minuteurs = []
 
@@ -363,12 +367,14 @@ function surTrade(n, sig, i, now) {
   if (S.bougiesMc && mcUsd !== null) {
     if (e.bougiesDepuis === null && mcUsd >= S.bougiesMc) e.bougiesDepuis = n.ts
     if (e.bougiesDepuis !== null) {
-      if (n.ts - e.bougiesDepuis <= S.bougiesMs) {
-        majBougie(e, { ts: n.ts, mcUsd, usd, cote: n.cote, wallet: n.wallet, liquiditeUsd, venue: n.venue },
-          { dureeMs: S.bougieDureeMs })
-      } else {
-        fermerBougie(e)
-      }
+      const depuis = n.ts - e.bougiesDepuis
+      const t = { ts: n.ts, mcUsd, usd, cote: n.cote, wallet: n.wallet, liquiditeUsd, venue: n.venue }
+      if (depuis <= S.bougiesMs) majBougie(e, t, { dureeMs: S.bougieDureeMs, serie: 'm1' })
+      else fermerBougie(e, 'm1')
+      // Dix secondes sur les premières minutes : l'ordre entre la sortie à ×2
+      // et le stop, qu'une bougie d'une minute ne permet pas de trancher.
+      if (S.bougiesFinesMs && depuis <= S.bougiesFinesMs) majBougie(e, t, { dureeMs: S.bougieFineDureeMs, serie: 's10' })
+      else fermerBougie(e, 's10')
     }
   }
 
@@ -440,10 +446,13 @@ function enregistrerCroisement(e, seuil, now) {
  * elle ne se fermerait jamais.
  */
 function recolterBougies(e, now, { tout = false } = {}) {
-  if (e.bougie && (tout || now - e.bougie.debut >= 2 * S.bougieDureeMs)) fermerBougie(e)
-  if (!e.bougiesFermees.length) return
-  const id = live.idToken(e.mint)
-  for (const b of e.bougiesFermees.splice(0)) bougiesAEcrire.push(live.docBougie(id, b))
+  for (const [serie, s] of Object.entries(e.series)) {
+    const duree = serie === 's10' ? S.bougieFineDureeMs : S.bougieDureeMs
+    if (s.ouverte && (tout || now - s.ouverte.debut >= 2 * duree)) fermerBougie(e, serie)
+    if (!s.fermees.length) continue
+    const id = live.idToken(e.mint)
+    for (const b of s.fermees.splice(0)) bougiesAEcrire[serie].push(live.docBougie(id, b))
+  }
 }
 
 // --- tâches périodiques ----------------------------------------------------------
@@ -454,10 +463,11 @@ async function ecrire() {
   try {
     const maintenant = Date.now()
     for (const e of etats.values()) recolterBougies(e, maintenant)
-    if (bougiesAEcrire.length) {
-      const lot = bougiesAEcrire.splice(0, bougiesAEcrire.length)
-      try { stats.bougiesEcrites += await live.ajouterBougies(lot) } catch (err) {
-        log.warn({ err: err.message, lot: lot.length }, 'bougies non écrites')
+    for (const [serie, file] of Object.entries(bougiesAEcrire)) {
+      if (!file.length) continue
+      const lot = file.splice(0, file.length)
+      try { stats.bougiesEcrites += await live.ajouterBougies(lot, SERIES[serie]) } catch (err) {
+        log.warn({ err: err.message, serie, lot: lot.length }, 'bougies non écrites')
       }
     }
     if (aEcrire.length) {

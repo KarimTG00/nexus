@@ -63,10 +63,10 @@ export function creerEtat({ mint, symbol = null, name = null, uri = null, creato
     // Seuils de mesure déjà jugés (retenus ou écartés) : chacun une seule fois.
     croisements: new Set(),
 
-    // Bougies : celle en cours, celles fermées pas encore écrites, et l'instant
-    // (chaîne) de la première — la fenêtre d'enregistrement part de là.
-    bougie: null,
-    bougiesFermees: [],
+    // Bougies, par série (`m1`, `s10`) : { ouverte, fermees } — celle en cours
+    // et celles fermées pas encore écrites. `bougiesDepuis` est l'instant
+    // (chaîne) de la première : les fenêtres d'enregistrement partent de là.
+    series: {},
     bougiesDepuis: null
   }
 }
@@ -430,16 +430,19 @@ export function decisions(e, s) {
  * quelques centaines de millisecondes d'écart. Un trade antérieur à la bougie
  * ouverte (reprise après coupure) est ignoré : réécrire une bougie fermée
  * fausserait son ouverture et sa clôture.
+ * Plusieurs séries coexistent (`serie`) : une minute sur plusieurs heures, et
+ * dix secondes sur les premières minutes, là où se jouent la sortie et le stop.
  * @returns {boolean} vrai si le trade a été compté
  */
-export function majBougie(e, t, { dureeMs = 60_000 } = {}) {
+export function majBougie(e, t, { dureeMs = 60_000, serie = 'm1' } = {}) {
   if (!Number.isFinite(t.mcUsd)) return false
+  const s = (e.series[serie] ??= { ouverte: null, fermees: [] })
   const debut = Math.floor(t.ts / dureeMs) * dureeMs
-  let b = e.bougie
+  let b = s.ouverte
   if (b && debut < b.debut) return false
-  if (b && debut > b.debut) { fermerBougie(e); b = null }
+  if (b && debut > b.debut) { fermerBougie(e, serie); b = null }
   if (!b) {
-    b = e.bougie = { debut, o: t.mcUsd, h: t.mcUsd, l: t.mcUsd, c: t.mcUsd,
+    b = s.ouverte = { debut, o: t.mcUsd, h: t.mcUsd, l: t.mcUsd, c: t.mcUsd,
       volumeUsd: 0, achats: 0, ventes: 0, acheteurs: new Set(), liquiditeUsd: null, venue: t.venue ?? null }
   }
   if (t.mcUsd > b.h) b.h = t.mcUsd
@@ -452,16 +455,17 @@ export function majBougie(e, t, { dureeMs = 60_000 } = {}) {
   return true
 }
 
-/** Ferme la bougie ouverte et la range parmi celles à écrire. */
-export function fermerBougie(e) {
-  const b = e.bougie
+/** Ferme la bougie ouverte d'une série et la range parmi celles à écrire. */
+export function fermerBougie(e, serie = 'm1') {
+  const s = e.series[serie]
+  const b = s?.ouverte
   if (!b) return
-  e.bougiesFermees.push({
+  s.fermees.push({
     debut: b.debut, o: b.o, h: b.h, l: b.l, c: b.c,
     volumeUsd: Math.round(b.volumeUsd), achats: b.achats, ventes: b.ventes, acheteurs: b.acheteurs.size,
     liquiditeUsd: b.liquiditeUsd === null ? null : Math.round(b.liquiditeUsd), venue: b.venue
   })
-  e.bougie = null
+  s.ouverte = null
 }
 
 /**

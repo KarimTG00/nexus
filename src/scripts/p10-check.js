@@ -445,22 +445,37 @@ majBougie(bg, tb(1, 10_000))
 majBougie(bg, tb(20, 14_000, 'buy', 5, 'B'))
 majBougie(bg, tb(40, 9_000, 'sell', 3))
 majBougie(bg, tb(59, 12_000, 'buy', 2, 'B'))
-verifier(bg.bougie.o === 10_000 && bg.bougie.h === 14_000 && bg.bougie.l === 9_000 && bg.bougie.c === 12_000
-  && bg.bougiesFermees.length === 0, 'une minute : ouverture, plus haut, plus bas, clôture')
+const m1 = bg.series.m1
+verifier(m1.ouverte.o === 10_000 && m1.ouverte.h === 14_000 && m1.ouverte.l === 9_000 && m1.ouverte.c === 12_000
+  && m1.fermees.length === 0, 'une minute : ouverture, plus haut, plus bas, clôture')
 majBougie(bg, tb(61, 13_000))
-const b1 = bg.bougiesFermees[0]
-verifier(bg.bougiesFermees.length === 1 && b1.debut === t0 && b1.volumeUsd === 20 && b1.achats === 3 && b1.ventes === 1 && b1.acheteurs === 2,
+const b1 = m1.fermees[0]
+verifier(m1.fermees.length === 1 && b1.debut === t0 && b1.volumeUsd === 20 && b1.achats === 3 && b1.ventes === 1 && b1.acheteurs === 2,
   'minute suivante : la précédente est fermée avec son volume, ses achats, ventes et acheteurs distincts')
-verifier(!majBougie(bg, tb(30, 50_000)) && bg.bougie.h === 13_000, 'trade en retard sur une bougie fermée : ignoré')
+verifier(!majBougie(bg, tb(30, 50_000)) && m1.ouverte.h === 13_000, 'trade en retard sur une bougie fermée : ignoré')
 verifier(!majBougie(bg, tb(62, null)), 'trade sans capitalisation : aucune bougie')
 fermerBougie(bg)
-verifier(bg.bougie === null && bg.bougiesFermees.length === 2 && bg.bougiesFermees[1].o === 13_000,
+verifier(m1.ouverte === null && m1.fermees.length === 2 && m1.fermees[1].o === 13_000,
   'fermeture forcée : la bougie ouverte rejoint celles à écrire')
+
+// Même minute, deux séries : la bougie de 10 s dit dans quel ordre sont venus
+// le sommet et le creux, ce que la bougie d'une minute confond.
+const fin = creerEtat({ mint: 'F10', vuA: t0 })
+for (const [s, mc] of [[2, 10_000], [8, 20_500], [14, 6_000], [55, 9_000]]) {
+  majBougie(fin, tb(s, mc), { dureeMs: 60_000, serie: 'm1' })
+  majBougie(fin, tb(s, mc), { dureeMs: 10_000, serie: 's10' })
+}
+fermerBougie(fin, 's10')
+const s10 = fin.series.s10.fermees
+verifier(fin.series.m1.ouverte.h === 20_500 && fin.series.m1.ouverte.l === 6_000 && s10.length === 3
+  && s10[0].h === 20_500 && s10[1].l === 6_000 && s10[1].debut === t0 + 10_000,
+  'série de 10 s : ×2 à la 8e seconde, creux à la 14e — l\'ordre est lisible, la minute le confondait')
 
 const rb2 = reglages({})
 verifier(rb2.bougiesMc === 10_000 && rb2.bougiesMs === 4 * 3_600_000 && rb2.bougieDureeMs === 60_000
+  && rb2.bougiesFinesMs === 30 * 60_000 && rb2.bougieFineDureeMs === 10_000
   && rb2.mesureSeule.includes('micro_trades'),
-  'par défaut : bougies d\'une minute dès 10 K pendant 4 h, micro_trades en mesure seule')
+  'par défaut : bougies d\'une minute pendant 4 h et de 10 s pendant 30 min dès 10 K, micro_trades en mesure seule')
 
 console.log(`\n${ok} vérifications passées, ${ko} en échec`)
 process.exit(ko ? 1 : 0)

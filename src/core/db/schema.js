@@ -229,6 +229,16 @@ export const collections = [
   },
 
   {
+    // Bougies de dix secondes, sur les premières minutes après `candles_from_mc`
+    // seulement. Une bougie d'une minute ne dit pas si le ×2 est venu avant ou
+    // après le stop ; sur ces tokens, les deux tombent souvent dans la même
+    // minute. Collection distincte : les requêtes sur la minute restent justes.
+    name: 'stream_candles_10s',
+    timeseries: { timeField: 'ts', metaField: 'meta', granularity: 'seconds' },
+    expireAfterSeconds: 30 * DAY
+  },
+
+  {
     // Montées organiques franchissant un seuil MESURÉ (10 K, 15 K…), avec
     // leurs signaux au croisement. Ni filtre, ni alerte, ni outcome : c'est la
     // matière dont M10 tire le seuil d'entrée et ses filtres. Sans expiration,

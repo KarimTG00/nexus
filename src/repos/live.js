@@ -251,9 +251,9 @@ export function docBougie(tokenId, b) {
   }
 }
 
-export async function ajouterBougies(docs) {
+export async function ajouterBougies(docs, collection = 'stream_candles') {
   if (!docs.length) return 0
-  const r = await col('stream_candles').insertMany(docs, { ordered: false })
+  const r = await col(collection).insertMany(docs, { ordered: false })
   return r.insertedCount
 }
 
