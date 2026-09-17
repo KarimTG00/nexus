@@ -29,10 +29,11 @@ import { CONFIG_V1 } from '../../core/config/defaults.js'
 import { fournisseur } from '../../adapters/rpc/providers.js'
 import { PUMP, PUMPSWAP, WSOL, evenementsDesLogs, normaliser, decoderPool } from './decode.js'
 import { creerEtat, appliquerTrade, decisions, paliersDus, Snipers,
-  marquerGraduation, croisementsDus, signauxCroisement, majBougie, fermerBougie } from './state.js'
+  marquerGraduation, croisementsDus, signauxCroisement, majBougie, fermerBougie, evaluerRecyclage } from './state.js'
 import { evaluerEntree, alerterSortie } from './alertes.js'
 import * as live from '../../repos/live.js'
 import * as alpha from './alpha.js'
+import { normSymbol } from '../../repos/tokens.js'
 
 const log = mod('collector:pump')
 
@@ -54,6 +55,11 @@ export function reglages(cfg) {
     bougieDureeMs: (s.candle_seconds ?? 60) * 1000,
     bougiesFinesMs: (s.candles_fine_minutes ?? 0) * 60_000,
     bougieFineDureeMs: (s.candle_fine_seconds ?? 10) * 1000,
+    recyclePremiers: s.recycle_first_buyers ?? 6,
+    recycleMin: s.recycle_min_recurring ?? 2,
+    recycleFenetreMs: (s.recycle_window_days ?? 7) * 86_400_000,
+    recycleAgeMs: (s.recycle_eval_seconds ?? 30) * 1000,
+    recycleMaxNoms: s.recycle_max_names ?? 30,
     multiples: [...(s.exit_multiples ?? [])].sort((a, b) => a - b),
     envoyerSorties: Boolean(s.send_exit_alerts),
     auteursMin: s.exit_authors_min,
@@ -91,6 +97,8 @@ const aResoudre = new Set()    // pools à relier à leur mint
 const poolsIllisibles = new Set()
 const aEcrire = []             // trades de l'étude, en attente d'écriture
 const alphaAEcrire = []        // trades des wallets alpha, en attente d'écriture
+const lancements = new Map()   // nom normalisé → [{ mint, ts, premiers: Set }], fenêtre glissante
+const nomsParWallet = new Map() // wallet → noms sous lesquels il a été parmi les premiers acheteurs
 // Bougies fermées en attente d'écriture, par série, et la collection de chacune.
 const SERIES = { m1: 'stream_candles', s10: 'stream_candles_10s' }
 const bougiesAEcrire = { m1: [], s10: [] }
@@ -335,6 +343,14 @@ function surTrade(n, sig, i, now) {
   e.sale = true
   stats.trades++
 
+  // --- lancements recyclés : même nom, mêmes premiers acheteurs ---------------
+  // Jugé une fois, dès qu'on connaît assez de premiers acheteurs, ou au bout
+  // de quelques secondes pour un token qui en attire peu.
+  if (!e.recyclageEvalue && e.complet && e.createdAt) {
+    const acheteurs = new Set(e.premiers.map(p => p.wallet).filter(w => w !== e.creator)).size
+    if (acheteurs >= S.recyclePremiers || (n.ts - e.createdAt >= S.recycleAgeMs && acheteurs >= S.recycleMin)) surRecyclage(e, now)
+  }
+
   // --- étude : trades complets des tokens qui montent, et d'un témoin ---------
   const doc = {
     _id: `${sig}:${i}`, token: live.idToken(n.mint), ts: new Date(n.ts), wallet: n.wallet,
@@ -378,7 +394,7 @@ function surTrade(n, sig, i, now) {
 
   // --- bougies : la trajectoire de chaque token passé à `candles_from_mc` ------
   if (S.bougiesMc && mcUsd !== null) {
-    if (e.bougiesDepuis === null && (mcUsd >= S.bougiesMc || e.alpha)) e.bougiesDepuis = n.ts
+    if (e.bougiesDepuis === null && (mcUsd >= S.bougiesMc || e.alpha || e.recycle)) e.bougiesDepuis = n.ts
     if (e.bougiesDepuis !== null) {
       const depuis = n.ts - e.bougiesDepuis
       const t = { ts: n.ts, mcUsd, usd, cote: n.cote, wallet: n.wallet, liquiditeUsd, venue: n.venue }
@@ -392,7 +408,7 @@ function surTrade(n, sig, i, now) {
   }
 
   // --- visibilité : écrit en base dès qu'il montre de la vie -------------------
-  if (!e.persiste && mcUsd !== null && (mcUsd >= S.persistMc || e.alpha)) {
+  if (!e.persiste && mcUsd !== null && (mcUsd >= S.persistMc || e.alpha || e.recycle)) {
     e.persiste = true
     live.persisterToken(e, { configVersion: cfgCourante._id })
       .then(nouveau => { if (nouveau) stats.persistes++ })
@@ -451,6 +467,74 @@ function enregistrerCroisement(e, seuil, now) {
       config_version: cfgCourante._id, signaux, createur
     }))
     .catch(err => log.warn({ mint: e.mint, seuil, err: err.message }, 'croisement non enregistré'))
+}
+
+/** Ajoute un lancement à l'index des noms. */
+function indexerLancement(cle, l) {
+  const liste = lancements.get(cle)
+  if (liste) liste.push(l); else lancements.set(cle, [l])
+  for (const w of l.premiers) {
+    const noms = nomsParWallet.get(w)
+    if (noms) noms.add(cle); else nomsParWallet.set(w, new Set([cle]))
+  }
+}
+
+/** Retire de l'index les lancements sortis de la fenêtre. */
+function purgerLancements() {
+  const limite = Date.now() - S.recycleFenetreMs
+  nomsParWallet.clear()
+  for (const [cle, liste] of lancements) {
+    const garde = liste.filter(l => l.ts >= limite)
+    if (!garde.length) { lancements.delete(cle); continue }
+    lancements.set(cle, garde)
+    for (const l of garde) for (const w of l.premiers) {
+      const noms = nomsParWallet.get(w)
+      if (noms) noms.add(cle); else nomsParWallet.set(w, new Set([cle]))
+    }
+  }
+}
+
+/**
+ * Juge un lancement : recyclé si son nom a déjà servi dans la fenêtre et si
+ * plusieurs de ses premiers acheteurs étaient déjà là. Il est indexé dans
+ * tous les cas, pour que les lancements suivants puissent s'y comparer.
+ * Un lancement recyclé est enregistré et suivi en entier (trades, bougies).
+ */
+function surRecyclage(e, now) {
+  e.recyclageEvalue = true
+  const cle = normSymbol(e.symbol)
+  if (!cle) return
+  const limite = e.createdAt - S.recycleFenetreMs
+  const precedents = (lancements.get(cle) ?? []).filter(p => p.ts >= limite && p.ts <= e.createdAt)
+  const r = evaluerRecyclage(e, precedents, {
+    nbPremiers: S.recyclePremiers,
+    minRecurrents: S.recycleMin,
+    estOmnipresent: w => (nomsParWallet.get(w)?.size ?? 0) > S.recycleMaxNoms
+  })
+  indexerLancement(cle, { mint: e.mint, ts: e.createdAt, premiers: new Set(r.premiers) })
+  if (!r.recycle) return
+
+  e.recycle = true
+  // L'usine relance aussi ses noms, avec ses propres wallets de saut. Le
+  // lancement est enregistré, mais ses trades ne s'écrivent pas : ils
+  // faisaient les deux tiers du volume qui a rempli le disque.
+  if (!e.usine) e.temoin = true
+  stats.recycles = (stats.recycles ?? 0) + 1
+  live.enregistrerRecyclage({
+    _id: live.idToken(e.mint),
+    symbol: e.symbol, name: e.name, cle,
+    created_at: new Date(e.createdAt),
+    detecte_a: new Date(now),
+    age_s: Math.round(((e.dernierTradeA ?? e.createdAt) - e.createdAt) / 1000),
+    mc: e.mc,
+    precedents: r.precedents,
+    precedents_mints: precedents.slice(-10).map(p => p.mint),
+    recurrents: r.recurrents,
+    premiers: r.premiers,
+    createur: e.creator,
+    usine: e.usine,
+    config_version: cfgCourante._id
+  }).catch(err => log.warn({ mint: e.mint, err: err.message }, 'lancement recyclé non enregistré'))
 }
 
 /**
@@ -665,6 +749,9 @@ function etatDepuisDoc(d) {
   e.persiste = true
   e.etude = Boolean(l.study)
   e.alpha = Boolean(l.alpha)
+  e.recycle = Boolean(l.recycled)
+  // Déjà indexé par `chargerLancements` : ne pas le rejuger.
+  e.recyclageEvalue = true
   // Trades déjà écrits : sans ce compte, chaque redémarrage rouvrait le
   // plafond — mesuré, 102 000 trades en trop sur 24 h. Un token d'étude
   // enregistré avant ce champ est tenu pour plein plutôt que réécrit.
@@ -703,6 +790,15 @@ export async function demarrerFlux(cfg) {
   await alpha.demarrerAlpha({ rpcHttp })
     .catch(err => log.warn({ err: err.message }, 'surveillance alpha non démarrée'))
   for (const [pool, info] of await live.chargerPools()) pools.set(pool, info)
+  // Index des noms en arrière-plan : ~11 000 lancements sur 7 jours, trop
+  // long à charger pour retenir le démarrage du flux. Les lancements jugés
+  // avant la fin du chargement se comparent à un index partiel.
+  live.chargerLancements(new Date(Date.now() - S.recycleFenetreMs), S.recyclePremiers)
+    .then(liste => {
+      for (const l of liste) indexerLancement(l.cle, l)
+      log.info({ lancements: liste.length, noms: lancements.size }, 'index des noms chargé')
+    })
+    .catch(err => log.warn({ err: err.message }, 'index des noms non chargé'))
   for (const d of await live.chargerSuivis(new Date(Date.now() - S.suiviHeures * 3_600_000))) {
     const e = etatDepuisDoc(d)
     etats.set(e.mint, e)
@@ -730,6 +826,7 @@ export async function demarrerFlux(cfg) {
   }, 15_000))
   minuteurs.push(setInterval(() => { rafraichirCours() }, 60_000))
   minuteurs.push(setInterval(() => snipers.purger(), 10 * 60_000))
+  minuteurs.push(setInterval(purgerLancements, 10 * 60_000))
   minuteurs.push(setInterval(journal, 60_000))
 
   log.info({

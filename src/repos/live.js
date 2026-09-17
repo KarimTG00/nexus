@@ -30,7 +30,7 @@ export const idToken = mint => `solana:${mint}`
  */
 export async function assurerIndex() {
   for (const c of collections.filter(x => ['trades', 'pump_pools', 'stream_gaps', 'stream_crossings',
-    'wallet_alpha', 'wallet_alpha_activity', 'wallet_alpha_trades'].includes(x.name))) {
+    'wallet_alpha', 'wallet_alpha_activity', 'wallet_alpha_trades', 'recycled_launches'].includes(x.name))) {
     for (const { key, ...options } of c.indexes ?? []) {
       try {
         await col(c.name).createIndex(key, options)
@@ -112,6 +112,8 @@ export function docLive(e) {
     trades_written: e.ecrits ?? 0,
     // Tradé par au moins un wallet alpha : trajectoire gardée en entier.
     alpha: Boolean(e.alpha),
+    // Lancement recyclé (même nom, mêmes premiers acheteurs) : suivi en entier.
+    recycled: Boolean(e.recycle),
     study: Boolean(e.etude),
     control: Boolean(e.temoin),
     updated_at: new Date()
@@ -290,6 +292,54 @@ export async function historiqueCreateur(creator, sauf, avant) {
     au_dessus_100k: docs.filter(d => (d.live?.mc_max ?? 0) >= 100_000).length,
     sommet_max: docs.reduce((m, d) => Math.max(m, d.live?.mc_max ?? 0), 0)
   }
+}
+
+/**
+ * Lancement recyclé détecté. Ses premiers acheteurs récurrents sont notés
+ * dans `wallet_alpha` (rôle `recurrent`, sans relevé RPC) : c'est la liste
+ * dans laquelle on choisira les équipes à surveiller de près.
+ */
+export async function enregistrerRecyclage(doc) {
+  try {
+    await col('recycled_launches').insertOne(doc)
+  } catch (e) {
+    if (e.code === 11000) return false
+    throw e
+  }
+  if (doc.recurrents.length) {
+    await col('wallet_alpha').bulkWrite(doc.recurrents.map(w => ({
+      updateOne: {
+        filter: { _id: w },
+        update: {
+          $setOnInsert: { role: 'recurrent', added_at: new Date() },
+          $inc: { lancements_recycles: 1 },
+          $addToSet: { noms: doc.cle },
+          $set: { dernier_lancement_at: doc.created_at }
+        },
+        upsert: true
+      }
+    })), { ordered: false })
+  }
+  return true
+}
+
+/**
+ * Lancements récents, pour reconstruire l'index des noms au démarrage. Seuls
+ * les tokens écrits en base sont connus : un lancement mort sous `persist_mc`
+ * avant un redémarrage est oublié.
+ */
+export async function chargerLancements(depuis, nbPremiers = 6) {
+  const docs = await col('tokens').find(
+    { 'live.source': 'stream', created_at: { $gte: depuis }, symbol_norm: { $ne: null } },
+    { projection: { address: 1, deployer: 1, symbol_norm: 1, created_at: 1, 'live.first_buyers': 1 } }
+  ).toArray()
+  return docs.map(d => ({
+    cle: d.symbol_norm,
+    mint: d.address,
+    ts: +d.created_at,
+    premiers: new Set((d.live?.first_buyers ?? [])
+      .filter(b => b.wallet !== d.deployer).slice(0, nbPremiers).map(b => b.wallet))
+  }))
 }
 
 /** Trades des wallets alpha. Un doublon (reconnexion, redémarrage) n'est pas une erreur. */

@@ -425,6 +425,26 @@ export function decisions(e, s) {
 }
 
 /**
+ * Lancement recyclé : son nom a déjà servi, et plusieurs de ses premiers
+ * acheteurs étaient déjà parmi les premiers acheteurs de ces lancements-là.
+ * C'est la signature observée du groupe alpha : 62 tokens, les mêmes noms
+ * relancés en boucle (WhiteBull ×12, Bulljak ×8…) par les mêmes wallets.
+ *
+ * Les wallets omniprésents (snipers achetant sous des centaines de noms) ne
+ * comptent pas : sur un nom générique relancé 80 fois, deux d'entre eux
+ * suffiraient à faire passer n'importe quel lancement pour une équipe.
+ *
+ * @param precedents [{ mint, premiers: Set }] lancements antérieurs du même nom
+ */
+export function evaluerRecyclage(e, precedents, { nbPremiers = 6, minRecurrents = 2, estOmnipresent = () => false } = {}) {
+  const premiers = [...new Set(e.premiers.slice(0, nbPremiers + 1).map(p => p.wallet).filter(w => w !== e.creator))]
+    .slice(0, nbPremiers)
+  const autres = precedents.filter(p => p.mint !== e.mint)
+  const recurrents = premiers.filter(w => !estOmnipresent(w) && autres.some(p => p.premiers.has(w)))
+  return { premiers, precedents: autres.length, recurrents, recycle: autres.length > 0 && recurrents.length >= minRecurrents }
+}
+
+/**
  * Bougie de capitalisation, découpée sur l'heure de la CHAÎNE du trade et non
  * sur l'heure de réception : deux points d'accès livrent le même trade à
  * quelques centaines de millisecondes d'écart. Un trade antérieur à la bougie

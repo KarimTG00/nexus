@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs'
 import { decoderEvenement, normaliser, evenementsDesLogs } from '../collector/pump/decode.js'
 import { creerEtat, appliquerTrade, partMicro, partDetenue, fenetres, auteurs, figerAuteurs,
   decisions, peutEvaluerEntree, paliersDus, multipleAtteint, Snipers,
-  marquerGraduation, croisementsDus, signauxCroisement, majBougie, fermerBougie } from '../collector/pump/state.js'
+  marquerGraduation, croisementsDus, signauxCroisement, majBougie, fermerBougie, evaluerRecyclage } from '../collector/pump/state.js'
 import microTrades from '../pipeline/filters/stream/micro_trades.js'
 import realBuyers from '../pipeline/filters/stream/real_buyers.js'
 import { filtersFor, runFilters } from '../pipeline/filters/index.js'
@@ -508,6 +508,28 @@ verifier(ra.tokens.length === 1 && ra.tokens[0].mint === 'MINT1' && ra.tokens[0]
   'compte de token fermé dans la transaction : tout le solde est sorti')
 verifier(ra.programmes.length === 1 && resumerTransaction({ meta: null }, WA) === null,
   'programmes appelés relevés ; transaction illisible : aucun résumé inventé')
+
+// --- 9. lancements recyclés ---------------------------------------------------------------------
+
+console.log('\n9. Lancements recyclés')
+const rc = creerEtat({ mint: 'RC2', creator: 'DEVR', createdAt: t0, vuA: t0 })
+for (const [k, w] of ['DEVR', 'G1', 'G2', 'X1', 'X2', 'X3', 'X4'].entries()) {
+  appliquerTrade(rc, tc(w, 'buy', 5, 3000 + k * 100, k * 0.2), oc(k * 0.2))
+}
+const ev = evaluerRecyclage(rc, [{ mint: 'RC1', premiers: new Set(['G1', 'G2', 'Z']) }], { nbPremiers: 6, minRecurrents: 2 })
+verifier(ev.recycle && ev.recurrents.join() === 'G1,G2' && ev.premiers.length === 6 && !ev.premiers.includes('DEVR') && ev.precedents === 1,
+  'nom déjà lancé, 2 premiers acheteurs déjà présents : lancement recyclé, créateur exclu')
+verifier(!evaluerRecyclage(rc, [{ mint: 'RC1', premiers: new Set(['G1']) }]).recycle,
+  'un seul acheteur en commun : pas une équipe')
+verifier(!evaluerRecyclage(rc, [{ mint: 'RC2', premiers: new Set(['G1', 'G2']) }]).recycle,
+  'le lancement lui-même ne compte pas comme précédent')
+verifier(!evaluerRecyclage(rc, []).recycle, 'nom jamais lancé : pas recyclé')
+verifier(!evaluerRecyclage(rc, [{ mint: 'RC1', premiers: new Set(['G1', 'G2']) }], { estOmnipresent: w => w === 'G2' }).recycle,
+  'un sniper omniprésent ne compte pas comme membre d\'équipe')
+const rr = reglages({})
+verifier(rr.recyclePremiers === 6 && rr.recycleMin === 2 && rr.recycleFenetreMs === 7 * 86_400_000 && rr.recycleAgeMs === 30_000
+  && rr.recycleMaxNoms === 30,
+  'par défaut : 6 premiers acheteurs, 2 récurrents, fenêtre de 7 jours, jugé au plus tard à 30 s')
 
 console.log(`\n${ok} vérifications passées, ${ko} en échec`)
 process.exit(ko ? 1 : 0)

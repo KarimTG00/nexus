@@ -281,6 +281,18 @@ export const collections = [
     ]
   },
 
+  {
+    // Lancements recyclés : un nom déjà lancé dans les 7 derniers jours, et
+    // plusieurs de ses premiers acheteurs déjà présents sur ces lancements.
+    // Signature d'une équipe qui relance le même token en boucle.
+    name: 'recycled_launches',
+    indexes: [
+      { key: { detecte_a: -1 },            name: 'ix_detecte' },
+      { key: { cle: 1, created_at: -1 },   name: 'ix_nom' },
+      { key: { recurrents: 1 },            name: 'ix_recurrents' }
+    ]
+  },
+
   // --- collections analytiques : pré-calculées pour le dashboard ------------
   ...['funnel', 'filter_perf', 'wallets', 'deployers',
       'blindspots', 'discovery', 'regime', 'proposals', 'succes', 'strategie'].map(n => ({

@@ -138,6 +138,20 @@ export const CONFIG_V1 = {
       candle_fine_seconds: 10,
       candles_fine_minutes: 30,
 
+      // Lancements RECYCLÉS : nom déjà lancé dans `recycle_window_days`, et au
+      // moins `recycle_min_recurring` de ses `recycle_first_buyers` premiers
+      // acheteurs déjà vus sur ces lancements. Jugé dès que ces acheteurs sont
+      // connus, ou après `recycle_eval_seconds`. Mesuré : le groupe alpha a
+      // relancé les mêmes noms 62 fois avec les mêmes wallets.
+      recycle_first_buyers: 6,
+      recycle_min_recurring: 2,
+      recycle_window_days: 7,
+      recycle_eval_seconds: 30,
+      // Un wallet parmi les premiers acheteurs sous plus de `recycle_max_names`
+      // noms dans la fenêtre est un sniper, pas un membre d'équipe : il ne
+      // compte pas comme récurrent. Le groupe alpha tournait sur ~20 noms.
+      recycle_max_names: 30,
+
       // Activité fabriquée : part des trades sous `micro_trade_usd`. En deçà
       // de `micro_min_sample` trades mesurés, le filtre s'abstient.
       micro_trade_usd: 1,
