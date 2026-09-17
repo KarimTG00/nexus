@@ -30,6 +30,10 @@ const HISTORIQUE_INITIAL = 300
 // En dessous, ce sont des pourboires et des frais.
 const SEUIL_VIREMENT_SOL = 0.5
 const PAUSE_MS = 200
+// Transactions lues par wallet à chaque passage : les wallets sont relevés à
+// tour de rôle, et un wallet très actif ne doit pas faire attendre les autres
+// (observé : 30 minutes de retard sur deux des quatre wallets du groupe).
+const MAX_PAR_PASSAGE = 25
 
 let surveilles = new Map()
 let rpc = null
@@ -141,6 +145,7 @@ async function releverWallet(d) {
   // est traité, et un échec au milieu reprend au cycle suivant sans trou.
   let traitees = 0
   for (const s of nouvelles.reverse()) {
+    if (traitees >= MAX_PAR_PASSAGE) break
     let tx
     try {
       tx = await rpc('getTransaction', [s.signature, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0, commitment: 'confirmed' }])
