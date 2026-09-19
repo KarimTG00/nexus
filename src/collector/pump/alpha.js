@@ -34,6 +34,11 @@ const PAUSE_MS = 200
 // tour de rôle, et un wallet très actif ne doit pas faire attendre les autres
 // (observé : 30 minutes de retard sur deux des quatre wallets du groupe).
 const MAX_PAR_PASSAGE = 25
+// Pages de signatures lues au plus par passage. Au-delà, le wallet produit
+// plus de transactions qu'on ne peut en lire : c'est un hub (plateforme
+// d'échange, service), pas un wallet qu'on relève en entier. Observé : un
+// wallet de plateforme a figé le relevé de tous les autres pendant deux jours.
+const MAX_PAGES = 5
 
 let surveilles = new Map()
 let rpc = null
@@ -129,7 +134,12 @@ async function releverWallet(d) {
   const wallet = d._id
   const nouvelles = []
   let avant = null
-  for (;;) {
+  for (let pages = 0; ; pages++) {
+    if (pages >= MAX_PAGES && d.last_signature) {
+      await col('wallet_alpha').updateOne({ _id: wallet }, { $set: { trop_actif: true, trop_actif_depuis: new Date() } })
+      log.warn({ wallet, signatures: nouvelles.length }, 'wallet trop actif pour être relevé — marqué hub, ignoré ensuite')
+      return 0
+    }
     const opts = { limit: PAGE, commitment: 'confirmed' }
     if (d.last_signature) opts.until = d.last_signature
     if (avant) opts.before = avant
@@ -183,6 +193,8 @@ async function cycle() {
   try {
     await chargerAlpha()
     for (const d of surveilles.values()) {
+      // Un hub reste dans `surveilles` : le flux garde ses trades pump.fun.
+      if (d.trop_actif) continue
       try {
         statsAlpha.transactions += await releverWallet(d)
       } catch (e) {
